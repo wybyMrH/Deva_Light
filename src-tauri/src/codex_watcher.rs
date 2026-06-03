@@ -96,7 +96,7 @@ fn poll_rollout_root(
         };
 
         if baseline {
-            initialize_existing_rollout(&path, &mut watched)?;
+            initialize_existing_rollout(aggregator, &path, &mut watched)?;
         }
 
         files.insert(path.clone(), watched);
@@ -113,10 +113,15 @@ fn poll_rollout_root(
     Ok(())
 }
 
-fn initialize_existing_rollout(path: &Path, watched: &mut WatchedRollout) -> io::Result<()> {
+fn initialize_existing_rollout(
+    aggregator: &StateAggregator,
+    path: &Path,
+    watched: &mut WatchedRollout,
+) -> io::Result<()> {
     let file = File::open(path)?;
     let mut reader = BufReader::new(file);
     let mut line = String::new();
+    let mut last_tool_call = None;
 
     loop {
         line.clear();
@@ -125,14 +130,54 @@ fn initialize_existing_rollout(path: &Path, watched: &mut WatchedRollout) -> io:
             break;
         }
 
-        if watched.meta.is_none() {
-            if let Ok(CodexLineEvent::SessionMeta(meta)) = parse_codex_line(line.trim_end()) {
-                watched.meta = Some(meta);
-            }
+        match parse_codex_line(line.trim_end()) {
+            Ok(CodexLineEvent::SessionMeta(meta)) => watched.meta = Some(meta),
+            Ok(CodexLineEvent::Status(status)) => watched.last_status = Some(status),
+            Ok(CodexLineEvent::ToolCall(tool_call)) => last_tool_call = Some(tool_call),
+            Ok(CodexLineEvent::Ignore) => {}
+            Err(error) => log_watcher_error(&format!("parse {}", path.display()), &error),
         }
     }
 
     watched.offset = reader.stream_position()?;
+    watched.last_activity_at = fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .unwrap_or_else(|_| SystemTime::now());
+    restore_existing_rollout(aggregator, path, watched, last_tool_call)?;
+    Ok(())
+}
+
+fn restore_existing_rollout(
+    aggregator: &StateAggregator,
+    path: &Path,
+    watched: &mut WatchedRollout,
+    last_tool_call: Option<String>,
+) -> io::Result<()> {
+    let Some(meta) = watched.meta.clone() else {
+        return Ok(());
+    };
+
+    let modified = fs::metadata(path)?.modified()?;
+    let Ok(age) = SystemTime::now().duration_since(modified) else {
+        return Ok(());
+    };
+
+    let mut status = watched.last_status.unwrap_or(Status::Idle);
+    if age >= REMOVE_INACTIVE_AFTER && status != Status::Working {
+        return Ok(());
+    }
+
+    if status == Status::Working && age >= STALE_WORKING_AFTER {
+        status = Status::Waiting;
+    }
+
+    aggregator.add_session(meta.session_id.clone(), Tool::Codex, &meta.cwd, status);
+    if let Some(tool_call) = last_tool_call {
+        aggregator.set_last_tool_call(&meta.session_id, tool_call);
+    }
+
+    watched.added_to_aggregator = true;
+    watched.last_status = Some(status);
     Ok(())
 }
 
@@ -486,7 +531,101 @@ mod tests {
     }
 
     #[test]
-    fn baseline_existing_rollout_does_not_replay_history() {
+    fn baseline_existing_rollout_restores_recent_state() {
+        let root = std::env::temp_dir().join(unique_name("ai-light-codex-root"));
+        let project = std::env::temp_dir().join(unique_name("ai-light-codex-project"));
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&project).unwrap();
+
+        let rollout = root.join("rollout-2026-05-31T00-00-00-s1.jsonl");
+        fs::write(
+            &rollout,
+            format!(
+                "{}\n{}\n",
+                json_line(
+                    "session_meta",
+                    &format!(r#"{{"id":"s1","cwd":"{}"}}"#, json_path(&project))
+                ),
+                json_line("event_msg", r#"{"type":"task_started"}"#)
+            ),
+        )
+        .unwrap();
+
+        let aggregator = StateAggregator::new();
+        let mut files = HashMap::new();
+        poll_rollout_root(&aggregator, &mut files, true, &root).unwrap();
+
+        let lights = aggregator.get_lights();
+        assert_eq!(lights.len(), 1);
+        assert_eq!(lights[0].status, Status::Working);
+
+        fs::write(
+            &rollout,
+            format!(
+                "{}\n{}\n{}\n",
+                json_line(
+                    "session_meta",
+                    &format!(r#"{{"id":"s1","cwd":"{}"}}"#, json_path(&project))
+                ),
+                json_line("event_msg", r#"{"type":"task_started"}"#),
+                json_line("event_msg", r#"{"type":"task_complete"}"#)
+            ),
+        )
+        .unwrap();
+
+        poll_rollout_root(&aggregator, &mut files, false, &root).unwrap();
+
+        let lights = aggregator.get_lights();
+        assert_eq!(lights.len(), 1);
+        assert_eq!(lights[0].status, Status::Done);
+
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn baseline_existing_rollouts_group_multiple_sessions_by_project() {
+        let root = std::env::temp_dir().join(unique_name("ai-light-codex-root"));
+        let project = std::env::temp_dir().join(unique_name("ai-light-codex-project"));
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&project).unwrap();
+
+        let first_rollout = root.join("rollout-2026-05-31T00-00-00-s1.jsonl");
+        let second_rollout = root.join("rollout-2026-05-31T00-05-00-s2.jsonl");
+
+        for (path, session_id, event_type) in [
+            (&first_rollout, "s1", "task_started"),
+            (&second_rollout, "s2", "task_complete"),
+        ] {
+            fs::write(
+                path,
+                format!(
+                    "{}\n{}\n",
+                    json_line(
+                        "session_meta",
+                        &format!(r#"{{"id":"{session_id}","cwd":"{}"}}"#, json_path(&project))
+                    ),
+                    json_line("event_msg", &format!(r#"{{"type":"{event_type}"}}"#))
+                ),
+            )
+            .unwrap();
+        }
+
+        let aggregator = StateAggregator::new();
+        let mut files = HashMap::new();
+        poll_rollout_root(&aggregator, &mut files, true, &root).unwrap();
+
+        let lights = aggregator.get_lights();
+        assert_eq!(lights.len(), 1);
+        assert_eq!(lights[0].sessions.len(), 2);
+        assert_eq!(lights[0].status, Status::Working);
+
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn baseline_existing_stale_completed_rollout_is_not_restored() {
         let root = std::env::temp_dir().join(unique_name("ai-light-codex-root"));
         let project = std::env::temp_dir().join(unique_name("ai-light-codex-project"));
         fs::create_dir_all(&root).unwrap();
@@ -506,31 +645,16 @@ mod tests {
         )
         .unwrap();
 
+        let old_time = filetime::FileTime::from_system_time(
+            SystemTime::now() - REMOVE_INACTIVE_AFTER - Duration::from_secs(1),
+        );
+        filetime::set_file_mtime(&rollout, old_time).unwrap();
+
         let aggregator = StateAggregator::new();
         let mut files = HashMap::new();
         poll_rollout_root(&aggregator, &mut files, true, &root).unwrap();
 
         assert!(aggregator.get_lights().is_empty());
-
-        fs::write(
-            &rollout,
-            format!(
-                "{}\n{}\n{}\n",
-                json_line(
-                    "session_meta",
-                    &format!(r#"{{"id":"s1","cwd":"{}"}}"#, json_path(&project))
-                ),
-                json_line("event_msg", r#"{"type":"task_complete"}"#),
-                json_line("event_msg", r#"{"type":"task_started"}"#)
-            ),
-        )
-        .unwrap();
-
-        poll_rollout_root(&aggregator, &mut files, false, &root).unwrap();
-
-        let lights = aggregator.get_lights();
-        assert_eq!(lights.len(), 1);
-        assert_eq!(lights[0].status, Status::Working);
 
         let _ = fs::remove_dir_all(root);
         let _ = fs::remove_dir_all(project);
