@@ -104,7 +104,7 @@ curl -sL https://github.com/wybyMrH/Deva_Light/releases/latest/download/install-
 
 ### 设置
 
-点击右上角 "DL" 图标打开设置：
+右键待机灯组或系统托盘菜单可打开设置：
 - **HTTP Bind**：监听地址（默认 127.0.0.1，远程转发设为 0.0.0.0）
 - **HTTP Port**：监听端口（默认随机分配）
 

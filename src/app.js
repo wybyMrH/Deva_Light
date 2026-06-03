@@ -36,6 +36,10 @@ tauriEvent?.listen("state-changed", (event) => {
   render();
 });
 
+window.addEventListener("drawer-visibility-changed", () => {
+  scheduleWindowResize();
+});
+
 document.addEventListener("click", (event) => {
   if (!menu.contains(event.target) && !drawer.contains(event.target)) {
     hideMenu();
@@ -120,10 +124,17 @@ function render() {
 }
 
 function createAppHandle() {
-  const root = document.createElement("section");
-  root.className = "app-handle";
-  root.title = "Deva Light";
-  root.textContent = "DL";
+  const root = createLightElement({
+    label: "Deva Light",
+    status: "Standby",
+    title: "Deva Light\nClick to open settings",
+    standby: true,
+  });
+  root.classList.add("traffic-light--app");
+
+  root.addEventListener("click", () => {
+    safeInvoke("open_settings");
+  });
 
   root.addEventListener("contextmenu", (event) => {
     event.preventDefault();
@@ -152,13 +163,14 @@ function createProjectLight(lightState) {
   root.addEventListener("click", (event) => {
     const projectId = root.dataset.projectId;
     const status = root.dataset.status;
-    const sessions = lightState.sessions || [];
+    const sessions = root.lightState?.sessions || [];
 
     // If multiple sessions, show drawer instead of confirming
     if (sessions.length > 1) {
       event.stopPropagation();
       showDrawer(projectId, drawer);
       updateDrawer(drawer, sessions);
+      scheduleWindowResize();
       return;
     }
 
@@ -205,6 +217,7 @@ function createLightElement({ label, status, title, standby = false }) {
 }
 
 function updateProjectLight(root, lightState) {
+  root.lightState = lightState;
   root.dataset.projectId = lightState.project_id;
   root.dataset.status = lightState.status;
   root.title = tooltipFor(lightState);
@@ -325,6 +338,12 @@ async function resizeWindowToContent() {
     const menuRect = menu.getBoundingClientRect();
     width = Math.max(width, Math.ceil(menuRect.right + MENU_EDGE_GUTTER));
     height = Math.max(height, Math.ceil(menuRect.bottom + MENU_EDGE_GUTTER));
+  }
+
+  if (!drawer.hidden) {
+    const drawerRect = drawer.getBoundingClientRect();
+    width = Math.max(width, Math.ceil(drawerRect.right + MENU_EDGE_GUTTER));
+    height = Math.max(height, Math.ceil(drawerRect.bottom + MENU_EDGE_GUTTER));
   }
 
   width = Math.max(72, width);

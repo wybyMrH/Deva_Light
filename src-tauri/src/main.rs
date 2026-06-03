@@ -9,7 +9,7 @@ use std::sync::Arc;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
-    Emitter, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent,
+    Emitter, Manager, WindowEvent,
 };
 
 mod ipc;
@@ -121,19 +121,6 @@ fn main() {
 
             if let Ok(resource_dir) = app.path().resource_dir() {
                 let _ = deva_light::hook_installer::install_hook_binary_from_resource(&resource_dir);
-            }
-
-            if !deva_light::hook_installer::check_hooks_installed() {
-                WebviewWindowBuilder::new(
-                    app,
-                    "install-hooks",
-                    WebviewUrl::App("install-hooks.html".into()),
-                )
-                .title("Claude Code Integration")
-                .inner_size(560.0, 340.0)
-                .resizable(false)
-                .center()
-                .build()?;
             }
 
             Ok(())

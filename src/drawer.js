@@ -17,7 +17,6 @@ let currentDrawerProjectId = null;
 export function createDrawer() {
   const drawer = document.createElement("div");
   drawer.className = "session-drawer";
-  drawer.hidden = true;
 
   const header = document.createElement("div");
   header.className = "drawer-header";
@@ -67,9 +66,11 @@ export function updateDrawer(drawer, sessions) {
   if (shouldShow && drawer.hidden) {
     drawer.hidden = false;
     startAutoCloseTimer();
+    notifyVisibilityChange();
   } else if (!shouldShow && !drawer.hidden) {
     drawer.hidden = true;
     stopAutoCloseTimer();
+    notifyVisibilityChange();
   }
 }
 
@@ -142,15 +143,17 @@ export function showDrawer(projectId, drawer) {
   currentDrawerProjectId = projectId;
   drawer.hidden = false;
   startAutoCloseTimer();
+  notifyVisibilityChange();
 }
 
 /**
  * Hide drawer
  */
 export function hideDrawer() {
-  const drawer = document.querySelector(".session-drawer");
+  const drawer = document.getElementById("drawer");
   if (drawer) {
     drawer.hidden = true;
+    notifyVisibilityChange();
   }
   currentDrawerProjectId = null;
   stopAutoCloseTimer();
@@ -174,6 +177,10 @@ function stopAutoCloseTimer() {
     clearTimeout(drawerAutoCloseTimer);
     drawerAutoCloseTimer = null;
   }
+}
+
+function notifyVisibilityChange() {
+  window.dispatchEvent(new CustomEvent("drawer-visibility-changed"));
 }
 
 /**
