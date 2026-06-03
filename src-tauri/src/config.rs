@@ -12,6 +12,10 @@ pub struct AppConfig {
     pub hooks_installed: bool,
     pub http_bind: String,
     pub http_port: Option<u16>,
+    pub always_on_top: bool,
+    pub notifications_enabled: bool,
+    pub notify_on_waiting: bool,
+    pub notify_on_done: bool,
 }
 
 impl Default for AppConfig {
@@ -23,6 +27,10 @@ impl Default for AppConfig {
             hooks_installed: false,
             http_bind: "127.0.0.1".to_string(),
             http_port: None,
+            always_on_top: true,
+            notifications_enabled: true,
+            notify_on_waiting: true,
+            notify_on_done: false,
         }
     }
 }
@@ -51,11 +59,11 @@ pub fn get_runtime_path() -> PathBuf {
 }
 
 pub fn get_lock_path() -> PathBuf {
-    get_config_dir().join("ai-light.lock")
+    get_config_dir().join("deva-light.lock")
 }
 
 pub fn get_log_path() -> PathBuf {
-    get_config_dir().join("ai-light.log")
+    get_config_dir().join("deva-light.log")
 }
 
 pub fn load_app_config() -> AppConfig {

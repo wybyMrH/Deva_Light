@@ -37,6 +37,10 @@ pub struct AppConfigView {
     pub http_bind: String,
     pub http_port: Option<u16>,
     pub runtime_port: Option<u16>,
+    pub always_on_top: bool,
+    pub notifications_enabled: bool,
+    pub notify_on_waiting: bool,
+    pub notify_on_done: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -44,6 +48,10 @@ pub struct AppConfigView {
 pub struct AppConfigUpdate {
     pub http_bind: String,
     pub http_port: Option<u16>,
+    pub always_on_top: Option<bool>,
+    pub notifications_enabled: Option<bool>,
+    pub notify_on_waiting: Option<bool>,
+    pub notify_on_done: Option<bool>,
 }
 
 #[tauri::command]
@@ -98,6 +106,10 @@ pub fn get_app_config() -> AppConfigView {
         http_bind: config.http_bind,
         http_port: config.http_port,
         runtime_port: load_runtime_config().map(|runtime| runtime.http_port),
+        always_on_top: config.always_on_top,
+        notifications_enabled: config.notifications_enabled,
+        notify_on_waiting: config.notify_on_waiting,
+        notify_on_done: config.notify_on_done,
     }
 }
 
@@ -109,8 +121,55 @@ pub fn save_app_config_command(update: AppConfigUpdate) -> Result<(), String> {
     let mut config = load_app_config();
     config.http_bind = update.http_bind;
     config.http_port = update.http_port;
+    if let Some(always_on_top) = update.always_on_top {
+        config.always_on_top = always_on_top;
+    }
+    if let Some(notifications_enabled) = update.notifications_enabled {
+        config.notifications_enabled = notifications_enabled;
+    }
+    if let Some(notify_on_waiting) = update.notify_on_waiting {
+        config.notify_on_waiting = notify_on_waiting;
+    }
+    if let Some(notify_on_done) = update.notify_on_done {
+        config.notify_on_done = notify_on_done;
+    }
 
     save_app_config(&config).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn set_always_on_top(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window not available".to_string())?;
+
+    window
+        .set_always_on_top(enabled)
+        .map_err(|error| error.to_string())?;
+
+    let mut config = load_app_config();
+    config.always_on_top = enabled;
+    save_app_config(&config).map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn prepare_uninstall(keep_config: bool) -> Result<(), String> {
+    // Remove hooks first
+    remove_hooks().map_err(|error| error.to_string())?;
+
+    if !keep_config {
+        // Full cleanup - remove everything
+        let config_dir = get_config_dir();
+        std::fs::remove_dir_all(&config_dir).map_err(|error| error.to_string())?;
+    } else {
+        // Keep config.json, remove runtime files
+        std::fs::remove_file(get_runtime_path()).ok();
+        std::fs::remove_file(get_lock_path()).ok();
+        std::fs::remove_file(get_log_path()).ok();
+    }
+
+    Ok(())
 }
 
 #[tauri::command]

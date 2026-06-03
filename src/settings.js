@@ -1,7 +1,6 @@
 const invoke = window.__TAURI__?.core?.invoke;
 const currentWindow =
-  window.__TAURI__?.window?.getCurrentWindow?.() ??
-  window.__TAURI__?.webviewWindow?.getCurrentWebviewWindow?.();
+  window.__TAURI__?.window?.getCurrentWindow?.() ?? window.__TAURI__?.webviewWindow?.getCurrentWebviewWindow?.();
 
 const bindSelect = document.getElementById("http-bind");
 const portInput = document.getElementById("http-port");
@@ -12,11 +11,21 @@ const saveButton = document.getElementById("save");
 const closeButton = document.getElementById("close");
 const installIntegrationButton = document.getElementById("install-integration");
 const removeIntegrationButton = document.getElementById("remove-integration");
+const prepareUninstallButton = document.getElementById("prepare-uninstall");
+
+// Window settings
+const alwaysOnTopCheckbox = document.getElementById("always-on-top");
+
+// Notification settings
+const notificationsEnabledCheckbox = document.getElementById("notifications-enabled");
+const notifyWaitingCheckbox = document.getElementById("notify-waiting");
+const notifyDoneCheckbox = document.getElementById("notify-done");
 
 saveButton.addEventListener("click", saveSettings);
 closeButton.addEventListener("click", () => currentWindow?.close());
 installIntegrationButton.addEventListener("click", installIntegration);
 removeIntegrationButton.addEventListener("click", removeIntegration);
+prepareUninstallButton.addEventListener("click", prepareUninstall);
 
 loadSettings();
 
@@ -30,6 +39,15 @@ async function loadSettings() {
     portInput.value = config.httpPort ?? "";
     configPath.textContent = config.configPath;
     runtimePort.textContent = config.runtimePort ? String(config.runtimePort) : "Not running";
+
+    // Window settings
+    alwaysOnTopCheckbox.checked = config.alwaysOnTop ?? true;
+
+    // Notification settings
+    notificationsEnabledCheckbox.checked = config.notificationsEnabled ?? true;
+    notifyWaitingCheckbox.checked = config.notifyOnWaiting ?? true;
+    notifyDoneCheckbox.checked = config.notifyOnDone ?? false;
+
     setStatus("");
   } catch (error) {
     setStatus(String(error), true);
@@ -49,9 +67,17 @@ async function saveSettings() {
       update: {
         httpBind: bindSelect.value,
         httpPort,
+        alwaysOnTop: alwaysOnTopCheckbox.checked,
+        notificationsEnabled: notificationsEnabledCheckbox.checked,
+        notifyOnWaiting: notifyWaitingCheckbox.checked,
+        notifyOnDone: notifyDoneCheckbox.checked,
       },
     });
-    setStatus("Saved. Restart AI Light to apply.");
+
+    // Apply always_on_top immediately
+    await invoke("set_always_on_top", { enabled: alwaysOnTopCheckbox.checked });
+
+    setStatus("Saved.");
   } catch (error) {
     setStatus(String(error), true);
   } finally {
@@ -74,7 +100,7 @@ async function installIntegration() {
 
 async function removeIntegration() {
   const confirmed = confirm(
-    "Remove AI Light hooks from Claude Code settings and delete the hook helper?",
+    "Remove Deva Light hooks from Claude Code settings and delete the hook helper?",
   );
   if (!confirmed) return;
 
@@ -83,6 +109,40 @@ async function removeIntegration() {
   try {
     await invoke("remove_hooks_command");
     setStatus("Claude integration removed. Restart Claude Code to apply.");
+  } catch (error) {
+    setStatus(String(error), true);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function prepareUninstall() {
+  const choice = confirm(
+    "Choose uninstall cleanup mode:\n\n" +
+    "Click OK for FULL CLEANUP (remove all config files)\n" +
+    "Click Cancel for KEEP CONFIG (only remove hooks and runtime files)\n\n" +
+    "Recommended: Full cleanup for complete removal."
+  );
+
+  const keepConfig = !choice; // OK = full cleanup (keepConfig=false), Cancel = keep config
+
+  const finalConfirm = confirm(
+    keepConfig
+      ? "This will remove Claude hooks and runtime files, but keep your config.json for future reinstall.\n\nProceed?"
+      : "This will completely remove all Deva Light data including hooks, config, and logs.\n\nProceed?"
+  );
+
+  if (!finalConfirm) return;
+
+  setBusy(true);
+
+  try {
+    await invoke("prepare_uninstall", { keepConfig });
+    setStatus(
+      keepConfig
+        ? "Partial cleanup complete. You can now uninstall the app. Config preserved for reinstall."
+        : "Full cleanup complete. You can now uninstall the app."
+    );
   } catch (error) {
     setStatus(String(error), true);
   } finally {
@@ -120,8 +180,13 @@ function setBusy(isBusy) {
   closeButton.disabled = isBusy;
   installIntegrationButton.disabled = isBusy;
   removeIntegrationButton.disabled = isBusy;
+  prepareUninstallButton.disabled = isBusy;
   bindSelect.disabled = isBusy;
   portInput.disabled = isBusy;
+  alwaysOnTopCheckbox.disabled = isBusy;
+  notificationsEnabledCheckbox.disabled = isBusy;
+  notifyWaitingCheckbox.disabled = isBusy;
+  notifyDoneCheckbox.disabled = isBusy;
 }
 
 function setStatus(message, isError = false) {

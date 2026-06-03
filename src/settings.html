@@ -3,43 +3,88 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AI Light Settings</title>
+    <title>Deva Light Settings</title>
     <link rel="stylesheet" href="settings.css" />
   </head>
   <body>
     <main class="settings">
       <header>
-        <h1>AI Light Settings</h1>
+        <h1>Deva Light Settings</h1>
         <p id="config-path"></p>
       </header>
 
-      <section class="field">
-        <label for="http-bind">Network</label>
-        <select id="http-bind">
-          <option value="127.0.0.1">Local only</option>
-          <option value="0.0.0.0">LAN forwarding</option>
-        </select>
+      <section class="group">
+        <h2>Window</h2>
+        <section class="field">
+          <label for="always-on-top">Always on Top</label>
+          <input id="always-on-top" type="checkbox" checked />
+          <span class="hint">Keep window visible above all other windows</span>
+        </section>
       </section>
 
-      <section class="field">
-        <label for="http-port">Port</label>
-        <input id="http-port" type="number" min="1" max="65535" placeholder="Auto" />
+      <section class="group">
+        <h2>Notifications</h2>
+        <section class="field">
+          <label for="notifications-enabled">Enable Notifications</label>
+          <input id="notifications-enabled" type="checkbox" checked />
+        </section>
+        <section class="field">
+          <label for="notify-waiting">Notify on Waiting</label>
+          <input id="notify-waiting" type="checkbox" checked />
+          <span class="hint">Show notification when AI needs attention</span>
+        </section>
+        <section class="field">
+          <label for="notify-done">Notify on Done</label>
+          <input id="notify-done" type="checkbox" />
+          <span class="hint">Show notification when task completes</span>
+        </section>
       </section>
 
-      <dl>
-        <div>
-          <dt>Active port</dt>
-          <dd id="runtime-port">Unknown</dd>
-        </div>
-      </dl>
+      <section class="group">
+        <h2>Network</h2>
+        <section class="field">
+          <label for="http-bind">Network</label>
+          <select id="http-bind">
+            <option value="127.0.0.1">Local only</option>
+            <option value="0.0.0.0">LAN forwarding</option>
+          </select>
+          <span class="hint">Use "LAN forwarding" for WSL/remote monitoring</span>
+        </section>
 
-      <section class="integration">
-        <button id="install-integration" type="button">
-          Install Claude Integration
-        </button>
-        <button id="remove-integration" class="danger" type="button">
-          Remove Claude Integration
-        </button>
+        <section class="field">
+          <label for="http-port">Port</label>
+          <input id="http-port" type="number" min="1" max="65535" placeholder="Auto" />
+          <span class="hint">Leave empty for automatic port assignment</span>
+        </section>
+
+        <dl>
+          <div>
+            <dt>Active port</dt>
+            <dd id="runtime-port">Unknown</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section class="group">
+        <h2>Claude Integration</h2>
+        <section class="integration">
+          <button id="install-integration" type="button">
+            Install Claude Integration
+          </button>
+          <button id="remove-integration" class="danger" type="button">
+            Remove Claude Integration
+          </button>
+        </section>
+      </section>
+
+      <section class="group">
+        <h2>Uninstall</h2>
+        <section class="integration">
+          <button id="prepare-uninstall" class="danger" type="button">
+            Prepare for Uninstall
+          </button>
+          <span class="hint">Clean up hooks and config files before uninstalling</span>
+        </section>
       </section>
 
       <div id="status" role="status"></div>
