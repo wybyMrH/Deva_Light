@@ -43,6 +43,23 @@ jobs:
         with:
           workspaces: './src-tauri -> target'
 
+      - name: Build bundled hook (macOS universal)
+        if: matrix.platform == 'macos-latest'
+        run: |
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          cargo build -p deva-light-hook --release --target aarch64-apple-darwin
+          cargo build -p deva-light-hook --release --target x86_64-apple-darwin
+          mkdir -p target/release
+          lipo -create \
+            -output target/release/deva-light-hook \
+            target/aarch64-apple-darwin/release/deva-light-hook \
+            target/x86_64-apple-darwin/release/deva-light-hook
+          chmod +x target/release/deva-light-hook
+
+      - name: Build bundled hook (Windows)
+        if: matrix.platform == 'windows-latest'
+        run: cargo build -p deva-light-hook --release
+
       - name: Install frontend dependencies
         run: npm install
 

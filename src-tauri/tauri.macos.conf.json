@@ -1,7 +1,7 @@
 {
   "bundle": {
     "resources": {
-      "../target/release/ai-light-hook": "ai-light-hook"
+      "../target/release/deva-light-hook": "deva-light-hook"
     }
   }
 }
