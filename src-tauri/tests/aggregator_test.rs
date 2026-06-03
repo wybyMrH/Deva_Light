@@ -1,5 +1,5 @@
-use ai_light::aggregator::StateAggregator;
-use ai_light::types::{Status, Tool};
+use deva_light::aggregator::StateAggregator;
+use deva_light::types::{Status, Tool};
 use std::path::PathBuf;
 
 #[test]

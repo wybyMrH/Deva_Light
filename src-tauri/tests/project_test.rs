@@ -1,10 +1,10 @@
-use ai_light::project::identify_project;
+use deva_light::project::identify_project;
 use std::path::Path;
 use std::process::Command;
 
 #[test]
 fn identifies_git_root_from_nested_directory() {
-    let repo = std::env::temp_dir().join(unique_name("ai-light-git-repo"));
+    let repo = std::env::temp_dir().join(unique_name("deva-light-git-repo"));
     let nested = repo.join("src").join("nested");
     std::fs::create_dir_all(&nested).unwrap();
 
@@ -29,7 +29,7 @@ fn identifies_git_root_from_nested_directory() {
 
 #[test]
 fn identifies_declared_tauri_product_name_from_git_root() {
-    let repo = std::env::temp_dir().join(unique_name("ai-light-named-git-repo"));
+    let repo = std::env::temp_dir().join(unique_name("deva-light-named-git-repo"));
     let nested = repo.join("src").join("nested");
     std::fs::create_dir_all(&nested).unwrap();
     std::fs::create_dir_all(repo.join("src-tauri")).unwrap();
@@ -61,7 +61,7 @@ fn identifies_declared_tauri_product_name_from_git_root() {
 
 #[test]
 fn falls_back_to_cwd_outside_git_repo() {
-    let cwd = std::env::temp_dir().join(unique_name("ai-light-plain-dir"));
+    let cwd = std::env::temp_dir().join(unique_name("deva-light-plain-dir"));
     std::fs::create_dir_all(&cwd).unwrap();
 
     let (project_id, project_label) = identify_project(&cwd);

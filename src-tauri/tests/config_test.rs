@@ -1,16 +1,16 @@
-use ai_light::config::{get_config_dir, AppConfig, RuntimeConfig};
+use deva_light::config::{get_config_dir, AppConfig, RuntimeConfig};
 use std::sync::Mutex;
 
 static CONFIG_ENV_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
-fn config_dir_points_to_ai_light_home_directory() {
+fn config_dir_points_to_deva_light_home_directory() {
     let _guard = CONFIG_ENV_LOCK.lock().unwrap();
-    std::env::remove_var("AI_LIGHT_CONFIG_DIR");
+    std::env::remove_var("DEVA_LIGHT_CONFIG_DIR");
 
     let dir = get_config_dir();
 
-    assert_eq!(dir.file_name().unwrap().to_string_lossy(), ".ai_light");
+    assert_eq!(dir.file_name().unwrap().to_string_lossy(), ".deva_light");
     assert!(dir.parent().is_some());
 }
 
@@ -40,9 +40,9 @@ fn app_config_deserializes_old_documents_with_defaults() {
 #[test]
 fn load_app_config_accepts_utf8_bom() {
     let _guard = CONFIG_ENV_LOCK.lock().unwrap();
-    let config_dir = std::env::temp_dir().join(unique_name("ai-light-config-bom"));
+    let config_dir = std::env::temp_dir().join(unique_name("deva-light-config-bom"));
     std::fs::create_dir_all(&config_dir).unwrap();
-    std::env::set_var("AI_LIGHT_CONFIG_DIR", &config_dir);
+    std::env::set_var("DEVA_LIGHT_CONFIG_DIR", &config_dir);
 
     std::fs::write(
         config_dir.join("config.json"),
@@ -50,12 +50,12 @@ fn load_app_config_accepts_utf8_bom() {
     )
     .unwrap();
 
-    let config = ai_light::config::load_app_config();
+    let config = deva_light::config::load_app_config();
     assert_eq!(config.http_bind, "0.0.0.0");
     assert_eq!(config.http_port, Some(17321));
 
     let _ = std::fs::remove_dir_all(config_dir);
-    std::env::remove_var("AI_LIGHT_CONFIG_DIR");
+    std::env::remove_var("DEVA_LIGHT_CONFIG_DIR");
 }
 
 #[test]

@@ -33,7 +33,7 @@ pub struct RuntimeConfig {
 }
 
 pub fn get_config_dir() -> PathBuf {
-    if let Some(config_dir) = std::env::var_os("AI_LIGHT_CONFIG_DIR") {
+    if let Some(config_dir) = std::env::var_os("DEVA_LIGHT_CONFIG_DIR") {
         return PathBuf::from(config_dir);
     }
 

@@ -1,4 +1,4 @@
-use ai_light::types::{LightState, SessionRef, Status, Tool};
+use deva_light::types::{LightState, SessionRef, Status, Tool};
 use std::time::Instant;
 
 #[test]

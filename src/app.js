@@ -238,9 +238,6 @@ function updateProjectLight(root, lightState) {
   root.querySelector(".lamp.yellow")?.classList.toggle("on", lightState.status === "Waiting");
   root.querySelector(".lamp.green")?.classList.toggle("on", lightState.status === "Working");
 }
-  root.querySelector(".lamp.yellow")?.classList.toggle("on", lightState.status === "Waiting");
-  root.querySelector(".lamp.green")?.classList.toggle("on", lightState.status === "Working");
-}
 
 function createLamp(color, isOn) {
   const lamp = document.createElement("div");

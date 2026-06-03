@@ -1,10 +1,10 @@
-use ai_light::hook_installer::{hook_binary_is_current, merge_hooks, remove_ai_light_hooks};
+use deva_light::hook_installer::{hook_binary_is_current, merge_hooks, remove_ai_light_hooks};
 use serde_json::json;
 use std::path::Path;
 
 #[test]
 fn merge_hooks_creates_hooks_object_when_missing() {
-    let merged = merge_hooks(json!({}), Path::new("/path/to/ai-light-hook")).unwrap();
+    let merged = merge_hooks(json!({}), Path::new("/path/to/deva-light-hook")).unwrap();
 
     let hooks = merged.get("hooks").unwrap();
     assert!(hooks.get("SessionStart").is_some());
@@ -29,7 +29,7 @@ fn merge_hooks_preserves_existing_settings_and_hooks() {
         "theme": "dark"
     });
 
-    let merged = merge_hooks(existing, Path::new("/path/to/ai-light-hook")).unwrap();
+    let merged = merge_hooks(existing, Path::new("/path/to/deva-light-hook")).unwrap();
 
     assert!(merged["hooks"].get("PreToolUse").is_some());
     assert!(merged["hooks"].get("SessionStart").is_some());
@@ -42,7 +42,7 @@ fn merge_hooks_preserves_existing_settings_and_hooks() {
     assert!(pre_tool_use.iter().any(|entry| entry["hooks"][0]["command"]
         .as_str()
         .unwrap()
-        .contains("ai-light-hook")));
+        .contains("deva-light-hook")));
 }
 
 #[test]
@@ -56,7 +56,7 @@ fn merge_hooks_preserves_existing_hooks_for_same_event() {
         }
     });
 
-    let merged = merge_hooks(existing, Path::new("/path/to/ai-light-hook")).unwrap();
+    let merged = merge_hooks(existing, Path::new("/path/to/deva-light-hook")).unwrap();
     let session_start = merged["hooks"]["SessionStart"].as_array().unwrap();
 
     assert_eq!(session_start.len(), 2);
@@ -68,7 +68,7 @@ fn merge_hooks_preserves_existing_hooks_for_same_event() {
         .any(|entry| entry["hooks"][0]["command"]
             .as_str()
             .unwrap()
-            .contains("ai-light-hook")));
+            .contains("deva-light-hook")));
 }
 
 #[test]
@@ -77,31 +77,31 @@ fn merge_hooks_replaces_existing_ai_light_hooks_for_same_event() {
         "hooks": {
             "SessionStart": [{
                 "matcher": "",
-                "hooks": [{"type": "command", "command": "/old/ai-light-hook session-start"}]
+                "hooks": [{"type": "command", "command": "/old/deva-light-hook session-start"}]
             }]
         }
     });
 
-    let merged = merge_hooks(existing, Path::new("/new/ai-light-hook")).unwrap();
+    let merged = merge_hooks(existing, Path::new("/new/deva-light-hook")).unwrap();
     let session_start = merged["hooks"]["SessionStart"].as_array().unwrap();
 
     assert_eq!(session_start.len(), 1);
     assert_eq!(
         session_start[0]["hooks"][0]["command"],
-        "/new/ai-light-hook"
+        "/new/deva-light-hook"
     );
     assert_eq!(session_start[0]["hooks"][0]["args"][0], "session-start");
 }
 
 #[test]
 fn merge_hooks_writes_event_as_args_to_avoid_shell_parsing() {
-    let hook_path = Path::new(r"C:\Users\kemp\.ai_light\bin\ai-light-hook.exe");
+    let hook_path = Path::new(r"C:\Users\kemp\.ai_light\bin\deva-light-hook.exe");
     let merged = merge_hooks(json!({}), hook_path).unwrap();
     let hook = &merged["hooks"]["Notification"][0]["hooks"][0];
 
     assert_eq!(
         hook["command"],
-        r"C:\Users\kemp\.ai_light\bin\ai-light-hook.exe"
+        r"C:\Users\kemp\.ai_light\bin\deva-light-hook.exe"
     );
     assert_eq!(hook["args"][0], "notification");
 }
@@ -113,7 +113,7 @@ fn remove_ai_light_hooks_preserves_other_hooks_and_settings() {
             "SessionStart": [
                 {
                     "matcher": "",
-                    "hooks": [{"type": "command", "command": "/old/ai-light-hook session-start"}]
+                    "hooks": [{"type": "command", "command": "/old/deva-light-hook session-start"}]
                 },
                 {
                     "matcher": "",
@@ -122,7 +122,7 @@ fn remove_ai_light_hooks_preserves_other_hooks_and_settings() {
             ],
             "Stop": [{
                 "matcher": "",
-                "hooks": [{"type": "command", "command": "/old/ai-light-hook stop"}]
+                "hooks": [{"type": "command", "command": "/old/deva-light-hook stop"}]
             }]
         },
         "theme": "dark"
@@ -140,7 +140,7 @@ fn remove_ai_light_hooks_preserves_other_hooks_and_settings() {
 
 #[test]
 fn merge_hooks_rejects_non_object_hooks_field() {
-    let result = merge_hooks(json!({"hooks": []}), Path::new("/path/to/ai-light-hook"));
+    let result = merge_hooks(json!({"hooks": []}), Path::new("/path/to/deva-light-hook"));
 
     assert!(result.is_err());
 }
@@ -149,7 +149,7 @@ fn merge_hooks_rejects_non_object_hooks_field() {
 fn merge_hooks_rejects_non_array_event_field() {
     let result = merge_hooks(
         json!({"hooks": {"SessionStart": {}}}),
-        Path::new("/path/to/ai-light-hook"),
+        Path::new("/path/to/deva-light-hook"),
     );
 
     assert!(result.is_err());
@@ -157,7 +157,7 @@ fn merge_hooks_rejects_non_array_event_field() {
 
 #[test]
 fn hook_binary_current_compares_file_content() {
-    let dir = std::env::temp_dir().join(unique_name("ai-light-hook-current"));
+    let dir = std::env::temp_dir().join(unique_name("deva-light-hook-current"));
     std::fs::create_dir_all(&dir).unwrap();
     let source = dir.join("source-hook");
     let destination = dir.join("destination-hook");

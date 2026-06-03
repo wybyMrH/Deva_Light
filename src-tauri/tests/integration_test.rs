@@ -1,7 +1,7 @@
-use ai_light::aggregator::StateAggregator;
-use ai_light::config::AppConfig;
-use ai_light::http_server::start_http_server;
-use ai_light::types::Status;
+use deva_light::aggregator::StateAggregator;
+use deva_light::config::AppConfig;
+use deva_light::http_server::start_http_server;
+use deva_light::types::Status;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
@@ -10,11 +10,11 @@ use std::time::Duration;
 
 #[test]
 fn hook_http_server_drives_session_lifecycle() {
-    let config_dir = std::env::temp_dir().join(unique_name("ai-light-config"));
+    let config_dir = std::env::temp_dir().join(unique_name("deva-light-config"));
     std::fs::create_dir_all(&config_dir).unwrap();
-    std::env::set_var("AI_LIGHT_CONFIG_DIR", &config_dir);
+    std::env::set_var("DEVA_LIGHT_CONFIG_DIR", &config_dir);
 
-    let project_dir = std::env::temp_dir().join(unique_name("ai-light-project"));
+    let project_dir = std::env::temp_dir().join(unique_name("deva-light-project"));
     std::fs::create_dir_all(&project_dir).unwrap();
 
     let aggregator = Arc::new(StateAggregator::new());
@@ -80,14 +80,14 @@ fn hook_http_server_drives_session_lifecycle() {
 
     let _ = std::fs::remove_dir_all(project_dir);
     let _ = std::fs::remove_dir_all(config_dir);
-    std::env::remove_var("AI_LIGHT_CONFIG_DIR");
+    std::env::remove_var("DEVA_LIGHT_CONFIG_DIR");
 }
 
 #[test]
 fn hook_http_server_respects_fixed_port_config() {
-    let config_dir = std::env::temp_dir().join(unique_name("ai-light-fixed-port-config"));
+    let config_dir = std::env::temp_dir().join(unique_name("deva-light-fixed-port-config"));
     std::fs::create_dir_all(&config_dir).unwrap();
-    std::env::set_var("AI_LIGHT_CONFIG_DIR", &config_dir);
+    std::env::set_var("DEVA_LIGHT_CONFIG_DIR", &config_dir);
 
     let probe = TcpListener::bind("127.0.0.1:0").unwrap();
     let fixed_port = probe.local_addr().unwrap().port();
@@ -103,7 +103,7 @@ fn hook_http_server_respects_fixed_port_config() {
     assert_eq!(port, fixed_port);
 
     let _ = std::fs::remove_dir_all(config_dir);
-    std::env::remove_var("AI_LIGHT_CONFIG_DIR");
+    std::env::remove_var("DEVA_LIGHT_CONFIG_DIR");
 }
 
 fn post_event(port: u16, body: &str) {

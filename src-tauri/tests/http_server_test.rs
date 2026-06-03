@@ -1,5 +1,5 @@
-use ai_light::http_server::{parse_hook_event, HookEvent};
-use ai_light::types::Status;
+use deva_light::http_server::{parse_hook_event, HookEvent};
+use deva_light::types::Status;
 
 #[test]
 fn parse_session_start_event() {
