@@ -1,8 +1,7 @@
 {
   "bundle": {
     "resources": {
-      "../target/release/deva-light-hook.exe": "deva-light-hook.exe",
-      "../target/release/WebView2Loader.dll": "WebView2Loader.dll"
+      "../target/release/deva-light-hook.exe": "deva-light-hook.exe"
     },
     "windows": {
       "webviewInstallMode": {
