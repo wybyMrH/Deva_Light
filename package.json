@@ -1,0 +1,13 @@
+{
+  "name": "ai-light",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "npx @tauri-apps/cli@2 dev",
+    "build": "npx @tauri-apps/cli@2 build",
+    "tauri": "npx @tauri-apps/cli@2"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.2"
+  }
+}

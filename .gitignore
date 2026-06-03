@@ -1,0 +1,48 @@
+# Build outputs
+/target/
+dist/
+/temp
+
+# Node.js
+node_modules/
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Rust
+**/*.rs.bk
+Cargo.lock
+
+# Tauri
+src-tauri/target/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# Test coverage
+coverage/
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+
+# Claude Code
+.claude/

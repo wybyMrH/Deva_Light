@@ -1,0 +1,202 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  color-scheme: dark;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: transparent;
+  --hit-test-bg: transparent;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: transparent;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+body {
+  padding: 10px 20px 20px 8px;
+}
+
+#lights-container {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  background: var(--hit-test-bg);
+}
+
+.app-handle {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: rgba(229, 231, 235, 0.78);
+  background: rgba(17, 20, 24, 0.86);
+  box-shadow:
+    0 6px 14px rgba(0, 0, 0, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: default;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+.traffic-light {
+  width: 60px;
+  min-height: 148px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding-bottom: 10px;
+  background: var(--hit-test-bg);
+  cursor: default;
+}
+
+.traffic-light.is-actionable {
+  cursor: pointer;
+}
+
+.light-housing {
+  width: 52px;
+  min-height: 112px;
+  display: grid;
+  grid-template-rows: repeat(3, 28px);
+  align-content: center;
+  justify-items: center;
+  gap: 6px;
+  padding: 8px;
+  border-radius: 8px;
+  background: linear-gradient(180deg, #23272e, #111418);
+  box-shadow:
+    0 6px 14px rgba(0, 0, 0, 0.32),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.lamp {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  transition: opacity 120ms linear, transform 120ms linear, background 120ms linear;
+}
+
+.lamp.red {
+  background: radial-gradient(circle at 34% 30%, #5f1919, #250b0b 70%);
+  opacity: 0.35;
+}
+
+.lamp.yellow {
+  background: radial-gradient(circle at 34% 30%, #634d13, #261c08 70%);
+  opacity: 0.35;
+}
+
+.lamp.green {
+  background: radial-gradient(circle at 34% 30%, #145c2c, #082512 70%);
+  opacity: 0.35;
+}
+
+.lamp.red.on {
+  background: radial-gradient(circle at 34% 30%, #fecaca, #ef4444 45%, #7f1d1d);
+  box-shadow: 0 0 22px rgba(239, 68, 68, 0.85);
+  opacity: 1;
+}
+
+.lamp.yellow.on {
+  background: radial-gradient(circle at 34% 30%, #fef08a, #fbbf24 45%, #92400e);
+  box-shadow: 0 0 20px rgba(251, 191, 36, 0.78);
+  opacity: 1;
+  animation: working-pulse 1.4s ease-in-out infinite;
+}
+
+.lamp.green.on {
+  background: radial-gradient(circle at 34% 30%, #bbf7d0, #22c55e 45%, #14532d);
+  box-shadow: 0 0 22px rgba(34, 197, 94, 0.82);
+  opacity: 1;
+}
+
+.light-label {
+  width: 60px;
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 16px;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: var(--hit-test-bg);
+  text-shadow:
+    -1px -1px 0 rgba(0, 0, 0, 0.95),
+    0 -1px 0 rgba(0, 0, 0, 0.95),
+    1px -1px 0 rgba(0, 0, 0, 0.95),
+    -1px 0 0 rgba(0, 0, 0, 0.95),
+    1px 0 0 rgba(0, 0, 0, 0.95),
+    -1px 1px 0 rgba(0, 0, 0, 0.95),
+    0 1px 0 rgba(0, 0, 0, 0.95),
+    1px 1px 0 rgba(0, 0, 0, 0.95),
+    0 2px 4px rgba(0, 0, 0, 0.85);
+}
+
+.menu {
+  position: fixed;
+  min-width: 136px;
+  padding: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 7px;
+  background: rgba(24, 28, 35, 0.96);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.46);
+  backdrop-filter: blur(10px);
+  z-index: 20;
+}
+
+.menu button {
+  width: 100%;
+  height: 24px;
+  display: block;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 5px;
+  color: #e5e7eb;
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.menu button:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.menu button.menu-close {
+  margin-bottom: 3px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 5px 5px 3px 3px;
+  color: rgba(229, 231, 235, 0.72);
+}
+
+@keyframes working-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  50% {
+    opacity: 0.72;
+    transform: scale(0.93);
+  }
+}

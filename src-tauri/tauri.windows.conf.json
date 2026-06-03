@@ -1,0 +1,15 @@
+{
+  "bundle": {
+    "resources": {
+      "../target/release/deva-light-hook.exe": "deva-light-hook.exe",
+      "../target/release/WebView2Loader.dll": "WebView2Loader.dll"
+    },
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      },
+      "wix": null
+    }
+  }
+}
