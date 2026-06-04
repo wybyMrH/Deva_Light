@@ -1,5 +1,6 @@
 use crate::aggregator::StateAggregator;
 use crate::config::{load_runtime_config, save_runtime_config, AppConfig, RuntimeConfig};
+use crate::logging::{log_error, log_info, log_warn};
 use crate::types::{Status, Tool};
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read, Write};
@@ -75,18 +76,32 @@ pub fn start_http_server(
     let port = listener.local_addr()?.port();
 
     save_runtime_config(&RuntimeConfig { http_port: port })?;
+    log_info(
+        "http_server",
+        format!(
+            "listening on {}:{}",
+            app_config.http_bind,
+            app_config.http_port.unwrap_or(port)
+        ),
+    );
 
     thread::Builder::new()
         .name("ai-light-http-server".to_string())
         .spawn(move || {
             for stream in listener.incoming() {
                 let Ok(stream) = stream else {
+                    log_warn("http_server", "failed to accept incoming connection");
                     continue;
                 };
 
                 let aggregator = Arc::clone(&aggregator);
                 thread::spawn(move || {
-                    let _ = handle_connection(stream, aggregator);
+                    if let Err(error) = handle_connection(stream, aggregator) {
+                        log_error(
+                            "http_server",
+                            format!("connection handling failed: {error}"),
+                        );
+                    }
                 });
             }
         })?;
@@ -101,6 +116,7 @@ fn default_session_id() -> String {
 fn handle_connection(mut stream: TcpStream, aggregator: Arc<StateAggregator>) -> io::Result<()> {
     let request = read_http_request(&mut stream)?;
     let Some((request_line, body)) = request else {
+        log_warn("http_server", "received malformed HTTP request");
         return write_response(&mut stream, 400, "Bad Request", "missing request");
     };
 
@@ -120,9 +136,15 @@ fn handle_connection(mut stream: TcpStream, aggregator: Arc<StateAggregator>) ->
                 apply_hook_event(&aggregator, event);
                 write_response(&mut stream, 200, "OK", "ok")
             }
-            Err(_) => write_response(&mut stream, 400, "Bad Request", "invalid json"),
+            Err(error) => {
+                log_warn("http_server", format!("invalid hook payload: {error}"));
+                write_response(&mut stream, 400, "Bad Request", "invalid json")
+            }
         },
-        _ => write_response(&mut stream, 404, "Not Found", "not found"),
+        _ => {
+            log_warn("http_server", format!("unhandled request {method} {path}"));
+            write_response(&mut stream, 404, "Not Found", "not found")
+        }
     }
 }
 
@@ -167,6 +189,17 @@ fn read_http_request(stream: &mut TcpStream) -> io::Result<Option<(String, Strin
 }
 
 fn apply_hook_event(aggregator: &StateAggregator, event: HookEvent) {
+    log_info(
+        "http_server",
+        format!(
+            "event {} session={} cwd={} tool={}",
+            event.event_type,
+            event.session_id,
+            event.cwd.as_deref().unwrap_or("-"),
+            event.tool_call.as_deref().unwrap_or("-")
+        ),
+    );
+
     match event.event_type.as_str() {
         "session-start" => {
             let cwd = event
@@ -183,6 +216,13 @@ fn apply_hook_event(aggregator: &StateAggregator, event: HookEvent) {
         }
         _ => {
             if should_ignore_late_event_after_done(aggregator, &event) {
+                log_info(
+                    "http_server",
+                    format!(
+                        "ignored late {} for completed session {}",
+                        event.event_type, event.session_id
+                    ),
+                );
                 return;
             }
 

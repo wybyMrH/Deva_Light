@@ -210,7 +210,11 @@ impl StateAggregator {
                 return;
             };
 
-            if let Some(session) = light.sessions.iter_mut().find(|s| s.session_id == session_id) {
+            if let Some(session) = light
+                .sessions
+                .iter_mut()
+                .find(|s| s.session_id == session_id)
+            {
                 match session.status {
                     Status::Done => {
                         // Remove the session

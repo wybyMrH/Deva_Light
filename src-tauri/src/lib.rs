@@ -1,5 +1,6 @@
 pub mod aggregator;
 pub mod app_lock;
+pub mod codex_paths;
 pub mod codex_watcher;
 pub mod config;
 pub mod hook_installer;

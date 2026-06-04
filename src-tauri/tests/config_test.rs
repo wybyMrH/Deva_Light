@@ -24,6 +24,7 @@ fn app_config_defaults_match_mvp_startup_state() {
     assert!(!config.hooks_installed);
     assert_eq!(config.http_bind, "127.0.0.1");
     assert_eq!(config.http_port, None);
+    assert!(config.codex_session_paths.is_empty());
 }
 
 #[test]
@@ -35,6 +36,7 @@ fn app_config_deserializes_old_documents_with_defaults() {
     assert_eq!(parsed.window_y, 260);
     assert_eq!(parsed.http_bind, "127.0.0.1");
     assert_eq!(parsed.http_port, None);
+    assert!(parsed.codex_session_paths.is_empty());
 }
 
 #[test]

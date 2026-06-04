@@ -10,10 +10,10 @@ use std::time::Instant;
 /// - Idle: 🔴 Red - Session started but not yet active
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Status {
-    Idle = 0,     // Red - session started, waiting for first prompt
-    Done = 1,     // Red - session ended / task complete
-    Working = 2,  // Green - AI is actively working
-    Waiting = 3,  // Yellow - needs user attention (permission, notification)
+    Idle = 0,    // Red - session started, waiting for first prompt
+    Done = 1,    // Red - session ended / task complete
+    Working = 2, // Green - AI is actively working
+    Waiting = 3, // Yellow - needs user attention (permission, notification)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

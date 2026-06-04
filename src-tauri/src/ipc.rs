@@ -1,4 +1,5 @@
 use deva_light::aggregator::StateAggregator;
+use deva_light::codex_paths::{codex_session_root_summary, format_paths};
 use deva_light::config::{
     get_config_dir, get_config_path, get_lock_path, get_log_path, get_runtime_path,
     load_app_config, load_runtime_config, save_app_config,
@@ -6,6 +7,7 @@ use deva_light::config::{
 use deva_light::hook_installer::{
     check_hooks_installed, install_hooks, preview_hook_config, remove_hooks,
 };
+use deva_light::logging::log_info;
 use deva_light::types::LightState;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -23,6 +25,9 @@ pub struct Diagnostics {
     pub claude_settings_path: String,
     pub hook_binary_path: String,
     pub codex_sessions_path: String,
+    pub codex_sessions_paths: Vec<String>,
+    pub codex_manual_paths: Vec<String>,
+    pub codex_missing_paths: Vec<String>,
     pub hooks_installed: bool,
     pub hook_binary_exists: bool,
     pub runtime_exists: bool,
@@ -41,6 +46,7 @@ pub struct AppConfigView {
     pub notifications_enabled: bool,
     pub notify_on_waiting: bool,
     pub notify_on_done: bool,
+    pub codex_manual_paths: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -52,6 +58,7 @@ pub struct AppConfigUpdate {
     pub notifications_enabled: Option<bool>,
     pub notify_on_waiting: Option<bool>,
     pub notify_on_done: Option<bool>,
+    pub codex_manual_paths: Option<Vec<String>>,
 }
 
 #[tauri::command]
@@ -110,6 +117,7 @@ pub fn get_app_config() -> AppConfigView {
         notifications_enabled: config.notifications_enabled,
         notify_on_waiting: config.notify_on_waiting,
         notify_on_done: config.notify_on_done,
+        codex_manual_paths: config.codex_session_paths,
     }
 }
 
@@ -133,8 +141,21 @@ pub fn save_app_config_command(update: AppConfigUpdate) -> Result<(), String> {
     if let Some(notify_on_done) = update.notify_on_done {
         config.notify_on_done = notify_on_done;
     }
+    if let Some(codex_manual_paths) = update.codex_manual_paths {
+        config.codex_session_paths = normalize_codex_manual_paths(codex_manual_paths);
+    }
 
-    save_app_config(&config).map_err(|error| error.to_string())
+    save_app_config(&config).map_err(|error| error.to_string())?;
+    log_info(
+        "ipc",
+        format!(
+            "saved app config http_bind={} http_port={:?} codex_manual_paths={}",
+            config.http_bind,
+            config.http_port,
+            config.codex_session_paths.len()
+        ),
+    );
+    Ok(())
 }
 
 #[tauri::command]
@@ -176,6 +197,7 @@ pub fn prepare_uninstall(keep_config: bool) -> Result<(), String> {
 pub fn get_diagnostics(aggregator: State<Arc<StateAggregator>>) -> Diagnostics {
     let log_path = get_log_path();
     let hook_binary_path = deva_light::hook_installer::get_hook_binary_path();
+    let codex_summary = codex_session_root_summary();
     Diagnostics {
         config_dir: get_config_dir().to_string_lossy().to_string(),
         runtime_path: get_runtime_path().to_string_lossy().to_string(),
@@ -185,7 +207,22 @@ pub fn get_diagnostics(aggregator: State<Arc<StateAggregator>>) -> Diagnostics {
             .to_string_lossy()
             .to_string(),
         hook_binary_path: hook_binary_path.to_string_lossy().to_string(),
-        codex_sessions_path: codex_sessions_dir().to_string_lossy().to_string(),
+        codex_sessions_path: format_paths(&codex_summary.active),
+        codex_sessions_paths: codex_summary
+            .active
+            .iter()
+            .map(|path| path.to_string_lossy().to_string())
+            .collect(),
+        codex_manual_paths: codex_summary
+            .manual
+            .iter()
+            .map(|path| path.to_string_lossy().to_string())
+            .collect(),
+        codex_missing_paths: codex_summary
+            .missing
+            .iter()
+            .map(|path| path.to_string_lossy().to_string())
+            .collect(),
         hooks_installed: check_hooks_installed(),
         hook_binary_exists: hook_binary_path.exists(),
         runtime_exists: get_runtime_path().exists(),
@@ -287,6 +324,23 @@ fn validate_http_port(port: Option<u16>) -> Result<(), String> {
     Ok(())
 }
 
+fn normalize_codex_manual_paths(paths: Vec<String>) -> Vec<String> {
+    let mut normalized = Vec::new();
+
+    for path in paths {
+        let trimmed = path.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        if !normalized.iter().any(|existing| existing == trimmed) {
+            normalized.push(trimmed.to_string());
+        }
+    }
+
+    normalized
+}
+
 #[tauri::command]
 pub fn check_hooks() -> bool {
     check_hooks_installed()
@@ -338,13 +392,6 @@ fn home_dir() -> Option<PathBuf> {
     std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
         .map(PathBuf::from)
-}
-
-fn codex_sessions_dir() -> PathBuf {
-    home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".codex")
-        .join("sessions")
 }
 
 fn recent_log(log_path: &PathBuf) -> String {

@@ -1,5 +1,6 @@
 use crate::aggregator::StateAggregator;
-use crate::logging::append_log;
+use crate::codex_paths::{codex_session_root_summary, CodexSessionRootSummary};
+use crate::logging::{log_error, log_info, log_warn};
 use crate::types::{Status, Tool};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -48,9 +49,18 @@ pub fn start_codex_watcher(aggregator: Arc<StateAggregator>) -> io::Result<()> {
 fn run_codex_watcher(aggregator: Arc<StateAggregator>) {
     let mut files = HashMap::new();
     let mut baseline = true;
+    let mut roots = codex_session_root_summary();
+    log_root_summary("watching Codex session roots", &roots);
 
     loop {
-        if let Err(error) = poll_codex_sessions(&aggregator, &mut files, baseline) {
+        let next_roots = codex_session_root_summary();
+        if next_roots != roots {
+            log_root_summary("reloaded Codex session roots", &next_roots);
+            roots = next_roots;
+            baseline = true;
+        }
+
+        if let Err(error) = poll_codex_sessions(&aggregator, &mut files, baseline, &roots.active) {
             log_watcher_error("poll codex sessions", &error);
         }
         baseline = false;
@@ -62,11 +72,23 @@ fn poll_codex_sessions(
     aggregator: &StateAggregator,
     files: &mut HashMap<PathBuf, WatchedRollout>,
     baseline: bool,
+    roots: &[PathBuf],
 ) -> io::Result<()> {
-    let root = codex_sessions_dir();
-    poll_rollout_root(aggregator, files, baseline, &root)
+    let mut rollouts = Vec::new();
+    let mut seen = HashSet::new();
+
+    for root in roots {
+        for path in find_rollout_files(root)? {
+            if seen.insert(path.clone()) {
+                rollouts.push(path);
+            }
+        }
+    }
+
+    poll_rollout_paths(aggregator, files, baseline, rollouts)
 }
 
+#[cfg(test)]
 fn poll_rollout_root(
     aggregator: &StateAggregator,
     files: &mut HashMap<PathBuf, WatchedRollout>,
@@ -74,9 +96,28 @@ fn poll_rollout_root(
     root: &Path,
 ) -> io::Result<()> {
     let rollouts = find_rollout_files(&root)?;
-    let live_paths: HashSet<_> = rollouts.iter().cloned().collect();
+    poll_rollout_paths(aggregator, files, baseline, rollouts)
+}
 
-    files.retain(|path, _| live_paths.contains(path));
+fn poll_rollout_paths(
+    aggregator: &StateAggregator,
+    files: &mut HashMap<PathBuf, WatchedRollout>,
+    baseline: bool,
+    mut rollouts: Vec<PathBuf>,
+) -> io::Result<()> {
+    rollouts.sort();
+    let live_paths: HashSet<_> = rollouts.iter().cloned().collect();
+    let removed_paths = files
+        .keys()
+        .filter(|path| !live_paths.contains(*path))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    for path in removed_paths {
+        if let Some(watched) = files.remove(&path) {
+            remove_missing_rollout(aggregator, &path, watched);
+        }
+    }
 
     for path in rollouts {
         if files.contains_key(&path) {
@@ -97,6 +138,8 @@ fn poll_rollout_root(
 
         if baseline {
             initialize_existing_rollout(aggregator, &path, &mut watched)?;
+        } else {
+            log_watcher_note(&format!("tracking new rollout {}", path.display()));
         }
 
         files.insert(path.clone(), watched);
@@ -178,6 +221,12 @@ fn restore_existing_rollout(
 
     watched.added_to_aggregator = true;
     watched.last_status = Some(status);
+    log_watcher_note(&format!(
+        "restored session {} from {} with status {}",
+        meta.session_id,
+        path.display(),
+        status_name(status)
+    ));
     Ok(())
 }
 
@@ -225,6 +274,7 @@ fn apply_codex_event(
 ) {
     match event {
         CodexLineEvent::SessionMeta(meta) => {
+            let is_new_meta = watched.meta.as_ref() != Some(&meta);
             if !watched.added_to_aggregator {
                 aggregator.add_session(
                     meta.session_id.clone(),
@@ -236,12 +286,20 @@ fn apply_codex_event(
                 watched.last_status = Some(Status::Idle);
             }
             watched.last_activity_at = SystemTime::now();
+            if is_new_meta {
+                log_watcher_note(&format!(
+                    "session {} mapped to {}",
+                    meta.session_id,
+                    meta.cwd.display()
+                ));
+            }
             watched.meta = Some(meta);
         }
         CodexLineEvent::Status(status) => {
             let Some(meta) = watched.meta.clone() else {
                 return;
             };
+            let status_changed = watched.last_status != Some(status);
 
             if !watched.added_to_aggregator {
                 aggregator.add_session(meta.session_id.clone(), Tool::Codex, &meta.cwd, status);
@@ -251,10 +309,18 @@ fn apply_codex_event(
             }
             watched.last_status = Some(status);
             watched.last_activity_at = SystemTime::now();
+            if status_changed {
+                log_watcher_note(&format!(
+                    "session {} -> {}",
+                    meta.session_id,
+                    status_name(status)
+                ));
+            }
         }
         CodexLineEvent::ToolCall(tool_call) => {
             if let Some(meta) = &watched.meta {
-                aggregator.set_last_tool_call(&meta.session_id, tool_call);
+                aggregator.set_last_tool_call(&meta.session_id, tool_call.clone());
+                log_watcher_note(&format!("session {} tool {}", meta.session_id, tool_call));
             }
             watched.last_activity_at = SystemTime::now();
         }
@@ -306,6 +372,24 @@ fn update_inactive_session(
     Ok(())
 }
 
+fn remove_missing_rollout(aggregator: &StateAggregator, path: &Path, watched: WatchedRollout) {
+    if let Some(meta) = watched.meta {
+        if watched.added_to_aggregator {
+            aggregator.remove_session(&meta.session_id);
+        }
+        log_watcher_note(&format!(
+            "stopped tracking missing rollout {} for session {}",
+            path.display(),
+            meta.session_id
+        ));
+    } else {
+        log_watcher_note(&format!(
+            "stopped tracking missing rollout {}",
+            path.display()
+        ));
+    }
+}
+
 pub fn parse_codex_line(line: &str) -> serde_json::Result<CodexLineEvent> {
     let line = line.trim_start_matches('\u{feff}');
 
@@ -348,7 +432,9 @@ pub fn parse_codex_line(line: &str) -> serde_json::Result<CodexLineEvent> {
             Ok(match event_type {
                 "task_started" | "agent_message" => CodexLineEvent::Status(Status::Working),
                 "task_complete" => CodexLineEvent::Status(Status::Done),
-                "error" | "stream_error" | "turn_aborted" => CodexLineEvent::Status(Status::Waiting),
+                "error" | "stream_error" | "turn_aborted" => {
+                    CodexLineEvent::Status(Status::Waiting)
+                }
                 _ => CodexLineEvent::Ignore,
             })
         }
@@ -409,25 +495,36 @@ fn is_rollout_file(path: &Path) -> bool {
     file_name.starts_with("rollout-") && file_name.ends_with(".jsonl")
 }
 
-fn codex_sessions_dir() -> PathBuf {
-    home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".codex")
-        .join("sessions")
+fn status_name(status: Status) -> &'static str {
+    match status {
+        Status::Idle => "idle",
+        Status::Done => "done",
+        Status::Working => "working",
+        Status::Waiting => "waiting",
+    }
 }
 
-fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
-        .map(PathBuf::from)
+fn log_root_summary(prefix: &str, roots: &CodexSessionRootSummary) {
+    let message = format!(
+        "{prefix}: active=[{}] manual=[{}] missing=[{}]",
+        crate::codex_paths::format_paths(&roots.active),
+        crate::codex_paths::format_paths(&roots.manual),
+        crate::codex_paths::format_paths(&roots.missing)
+    );
+
+    if roots.active.is_empty() {
+        log_warn("codex_watcher", message);
+    } else {
+        log_info("codex_watcher", message);
+    }
 }
 
 fn log_watcher_error(context: &str, error: &dyn std::fmt::Display) {
-    log_watcher_note(&format!("{context}: {error}"));
+    log_error("codex_watcher", format!("{context}: {error}"));
 }
 
 fn log_watcher_note(message: &str) {
-    let _ = append_log(&format!("codex_watcher: {message}"));
+    log_info("codex_watcher", message);
 }
 
 #[cfg(test)]
@@ -654,6 +751,95 @@ mod tests {
         let mut files = HashMap::new();
         poll_rollout_root(&aggregator, &mut files, true, &root).unwrap();
 
+        assert!(aggregator.get_lights().is_empty());
+
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn polling_multiple_roots_restores_sessions_from_each_root() {
+        let first_root = std::env::temp_dir().join(unique_name("ai-light-codex-root-a"));
+        let second_root = std::env::temp_dir().join(unique_name("ai-light-codex-root-b"));
+        let first_project = std::env::temp_dir().join(unique_name("ai-light-codex-project-a"));
+        let second_project = std::env::temp_dir().join(unique_name("ai-light-codex-project-b"));
+        fs::create_dir_all(&first_root).unwrap();
+        fs::create_dir_all(&second_root).unwrap();
+        fs::create_dir_all(&first_project).unwrap();
+        fs::create_dir_all(&second_project).unwrap();
+
+        fs::write(
+            first_root.join("rollout-2026-05-31T00-00-00-s1.jsonl"),
+            format!(
+                "{}\n{}\n",
+                json_line(
+                    "session_meta",
+                    &format!(r#"{{"id":"s1","cwd":"{}"}}"#, json_path(&first_project))
+                ),
+                json_line("event_msg", r#"{"type":"task_started"}"#)
+            ),
+        )
+        .unwrap();
+
+        fs::write(
+            second_root.join("rollout-2026-05-31T00-01-00-s2.jsonl"),
+            format!(
+                "{}\n{}\n",
+                json_line(
+                    "session_meta",
+                    &format!(r#"{{"id":"s2","cwd":"{}"}}"#, json_path(&second_project))
+                ),
+                json_line("event_msg", r#"{"type":"task_complete"}"#)
+            ),
+        )
+        .unwrap();
+
+        let aggregator = StateAggregator::new();
+        let mut files = HashMap::new();
+        let roots = vec![first_root.clone(), second_root.clone()];
+        poll_codex_sessions(&aggregator, &mut files, true, &roots).unwrap();
+
+        let lights = aggregator.get_lights();
+        assert_eq!(lights.len(), 2);
+        assert!(lights.iter().any(|light| light.project_id == first_project));
+        assert!(lights
+            .iter()
+            .any(|light| light.project_id == second_project));
+
+        let _ = fs::remove_dir_all(first_root);
+        let _ = fs::remove_dir_all(second_root);
+        let _ = fs::remove_dir_all(first_project);
+        let _ = fs::remove_dir_all(second_project);
+    }
+
+    #[test]
+    fn removing_rollout_file_removes_session_from_aggregator() {
+        let root = std::env::temp_dir().join(unique_name("ai-light-codex-root"));
+        let project = std::env::temp_dir().join(unique_name("ai-light-codex-project"));
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&project).unwrap();
+
+        let rollout = root.join("rollout-2026-05-31T00-00-00-s1.jsonl");
+        fs::write(
+            &rollout,
+            format!(
+                "{}\n{}\n",
+                json_line(
+                    "session_meta",
+                    &format!(r#"{{"id":"s1","cwd":"{}"}}"#, json_path(&project))
+                ),
+                json_line("event_msg", r#"{"type":"task_started"}"#)
+            ),
+        )
+        .unwrap();
+
+        let aggregator = StateAggregator::new();
+        let mut files = HashMap::new();
+        poll_rollout_root(&aggregator, &mut files, false, &root).unwrap();
+        assert_eq!(aggregator.get_lights().len(), 1);
+
+        fs::remove_file(&rollout).unwrap();
+        poll_rollout_root(&aggregator, &mut files, false, &root).unwrap();
         assert!(aggregator.get_lights().is_empty());
 
         let _ = fs::remove_dir_all(root);

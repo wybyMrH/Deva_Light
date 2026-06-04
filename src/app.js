@@ -428,6 +428,16 @@ async function showDiagnostics() {
   const diagnostics = await safeInvoke("get_diagnostics");
   if (!diagnostics) return;
 
+  const codexSessionPaths = Array.isArray(diagnostics.codex_sessions_paths)
+    ? diagnostics.codex_sessions_paths
+    : [diagnostics.codex_sessions_path].filter(Boolean);
+  const codexManualPaths = Array.isArray(diagnostics.codex_manual_paths)
+    ? diagnostics.codex_manual_paths
+    : [];
+  const codexMissingPaths = Array.isArray(diagnostics.codex_missing_paths)
+    ? diagnostics.codex_missing_paths
+    : [];
+
   const text = [
     "AI Light Diagnostics",
     "",
@@ -437,7 +447,12 @@ async function showDiagnostics() {
     `Log: ${diagnostics.log_path}`,
     `Claude settings: ${diagnostics.claude_settings_path}`,
     `Hook binary: ${diagnostics.hook_binary_path}`,
-    `Codex sessions: ${diagnostics.codex_sessions_path}`,
+    `Codex sessions: ${codexSessionPaths[0] || "(none)"}`,
+    ...codexSessionPaths.slice(1).map((path) => `  - ${path}`),
+    `Codex manual: ${codexManualPaths[0] || "(none)"}`,
+    ...codexManualPaths.slice(1).map((path) => `  - ${path}`),
+    `Codex missing: ${codexMissingPaths[0] || "(none)"}`,
+    ...codexMissingPaths.slice(1).map((path) => `  - ${path}`),
     "",
     `Hooks installed: ${diagnostics.hooks_installed}`,
     `Hook binary exists: ${diagnostics.hook_binary_exists}`,

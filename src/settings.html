@@ -66,6 +66,41 @@
       </section>
 
       <section class="group">
+        <h2>Codex Monitoring</h2>
+        <section class="field field-stack">
+          <label for="codex-manual-paths">Custom Roots</label>
+          <textarea
+            id="codex-manual-paths"
+            rows="4"
+            placeholder="One sessions path per line"
+          ></textarea>
+          <span class="hint">
+            Add the folder that contains your `YYYY/MM/DD/rollout-*.jsonl` files when auto-detection misses them.
+          </span>
+        </section>
+
+        <dl class="path-summary">
+          <div>
+            <dt>Detected now</dt>
+            <dd>
+              <ul id="codex-detected-paths" class="path-list"></ul>
+            </dd>
+          </div>
+          <div>
+            <dt>Missing</dt>
+            <dd>
+              <ul id="codex-missing-paths" class="path-list"></ul>
+            </dd>
+          </div>
+        </dl>
+
+        <p class="hint hint-block">
+          Examples: `C:\Users\you\.codex\sessions`, `\\wsl.localhost\Ubuntu\home\you\.codex\sessions`,
+          `/Users/you/.codex/sessions`, `/home/you/.codex/sessions`
+        </p>
+      </section>
+
+      <section class="group">
         <h2>Claude Integration</h2>
         <section class="integration">
           <button id="install-integration" type="button">
@@ -84,6 +119,20 @@
             Prepare for Uninstall
           </button>
           <span class="hint">Clean up hooks and config files before uninstalling</span>
+        </section>
+      </section>
+
+      <section class="group">
+        <h2>Diagnostics</h2>
+        <section class="integration diagnostics-actions">
+          <button id="refresh-diagnostics" type="button">Refresh Diagnostics</button>
+          <button id="copy-diagnostics" type="button">Copy Diagnostics</button>
+          <button id="open-app-log" type="button">Open App Log</button>
+        </section>
+
+        <section class="field field-stack">
+          <label for="recent-log">Recent Log</label>
+          <pre id="recent-log">(loading)</pre>
         </section>
       </section>
 

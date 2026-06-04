@@ -16,6 +16,7 @@ pub struct AppConfig {
     pub notifications_enabled: bool,
     pub notify_on_waiting: bool,
     pub notify_on_done: bool,
+    pub codex_session_paths: Vec<String>,
 }
 
 impl Default for AppConfig {
@@ -31,6 +32,7 @@ impl Default for AppConfig {
             notifications_enabled: true,
             notify_on_waiting: true,
             notify_on_done: false,
+            codex_session_paths: Vec::new(),
         }
     }
 }

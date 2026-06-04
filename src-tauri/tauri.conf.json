@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Deva Light",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "identifier": "com.deva-light.desktop",
   "build": {
     "frontendDist": "../src",
@@ -28,8 +28,8 @@
         "label": "settings",
         "title": "Deva Light Settings",
         "url": "settings.html",
-        "width": 480,
-        "height": 450,
+        "width": 560,
+        "height": 700,
         "resizable": false,
         "decorations": true,
         "transparent": false,

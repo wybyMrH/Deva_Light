@@ -12,15 +12,15 @@
 body {
   min-height: 100vh;
   margin: 0;
-  display: grid;
-  place-items: center;
+  overflow: auto;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 34%),
     #171b22;
 }
 
 .settings {
-  width: min(480px, calc(100vw - 40px));
+  width: min(560px, calc(100vw - 40px));
+  margin: 20px auto 28px;
 }
 
 header {
@@ -72,6 +72,10 @@ p {
   margin-bottom: 12px;
 }
 
+.field.field-stack {
+  align-items: start;
+}
+
 .field:has(input[type="checkbox"]) {
   grid-template-columns: 140px auto 1fr;
 }
@@ -88,17 +92,36 @@ dt {
   padding-left: 8px;
 }
 
+.hint-block {
+  display: block;
+  padding-left: 0;
+  line-height: 1.5;
+  white-space: normal;
+}
+
 select,
-input[type="number"] {
+input[type="number"],
+textarea {
   width: 100%;
-  height: 34px;
-  padding: 0 10px;
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 7px;
   color: #f8fafc;
   background: #11151c;
   font: inherit;
   font-size: 13px;
+}
+
+select,
+input[type="number"] {
+  height: 34px;
+  padding: 0 10px;
+}
+
+textarea {
+  min-height: 92px;
+  padding: 9px 10px;
+  resize: vertical;
+  line-height: 1.45;
 }
 
 input[type="checkbox"] {
@@ -110,7 +133,8 @@ input[type="checkbox"] {
 }
 
 select:focus,
-input:focus {
+input:focus,
+textarea:focus {
   border-color: #38bdf8;
   outline: none;
   box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.14);
@@ -126,15 +150,69 @@ dl div {
   gap: 12px;
 }
 
+.path-summary {
+  margin-top: 16px;
+}
+
+.path-summary div {
+  align-items: start;
+  margin-bottom: 10px;
+}
+
 dd {
   margin: 0;
   color: #e5e7eb;
   font-size: 13px;
 }
 
+.path-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.path-list li,
+#recent-log {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 7px;
+  background: rgba(15, 23, 42, 0.7);
+}
+
+.path-list li {
+  padding: 8px 10px;
+  color: #dbe4f0;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.path-list li.empty {
+  color: #64748b;
+}
+
 .integration {
   display: grid;
   gap: 8px;
+}
+
+.diagnostics-actions {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+#recent-log {
+  min-height: 180px;
+  max-height: 260px;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  color: #dbe4f0;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
 }
 
 #status {
@@ -207,4 +285,22 @@ button.danger {
 
 button.danger:hover {
   background: rgba(153, 27, 27, 0.48);
+}
+
+@media (max-width: 560px) {
+  .field,
+  .field.field-stack,
+  .field:has(input[type="checkbox"]),
+  dl div,
+  .path-summary div {
+    grid-template-columns: 1fr;
+  }
+
+  .diagnostics-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .hint {
+    padding-left: 0;
+  }
 }

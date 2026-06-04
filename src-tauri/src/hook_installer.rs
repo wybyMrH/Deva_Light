@@ -1,3 +1,4 @@
+use crate::logging::{log_info, log_warn};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -33,6 +34,10 @@ pub fn install_hook_binary_from_resource(resource_dir: &Path) -> Result<bool, st
         .into_iter()
         .find(|path| path.exists())
     else {
+        log_warn(
+            "hook_installer",
+            "bundled hook helper not found in resources",
+        );
         return Ok(false);
     };
 
@@ -46,6 +51,10 @@ pub fn install_hook_binary_from_resource(resource_dir: &Path) -> Result<bool, st
     }
 
     fs::copy(source, destination)?;
+    log_info(
+        "hook_installer",
+        "copied bundled hook helper into config directory",
+    );
     Ok(true)
 }
 
@@ -110,6 +119,7 @@ pub fn install_hooks() -> Result<(), Box<dyn std::error::Error>> {
 
     let merged = merge_hooks(existing, &hook_path)?;
     fs::write(settings_path, serde_json::to_string_pretty(&merged)?)?;
+    log_info("hook_installer", "installed Claude hooks");
 
     Ok(())
 }
@@ -131,6 +141,8 @@ pub fn remove_hooks() -> Result<(), Box<dyn std::error::Error>> {
     if hook_path.exists() {
         fs::remove_file(hook_path)?;
     }
+
+    log_info("hook_installer", "removed Claude hooks and helper binary");
 
     Ok(())
 }
