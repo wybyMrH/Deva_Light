@@ -1,5 +1,5 @@
 use crate::aggregator::StateAggregator;
-use crate::logging::{log_info, log_warn};
+use crate::logging::log_info;
 use crate::types::{Status, Tool};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-const POLL_INTERVAL: Duration = Duration::from_secs(2);
+const POLL_INTERVAL: Duration = Duration::from_secs(3);
 const STALE_WORKING_AFTER: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Debug, Deserialize)]
@@ -26,8 +26,6 @@ struct TrackedSession {
     cwd: PathBuf,
     pid: i32,
     file_name: String,
-    last_seen_alive: std::time::Instant,
-    status: Status,
 }
 
 pub fn start_claude_watcher(aggregator: Arc<StateAggregator>) {
@@ -40,137 +38,91 @@ pub fn start_claude_watcher(aggregator: Arc<StateAggregator>) {
 fn run_claude_watcher(aggregator: Arc<StateAggregator>) {
     let mut tracked: HashMap<String, TrackedSession> = HashMap::new();
 
-    // Initial scan for existing sessions
     let sessions_dir = claude_sessions_dir();
     log_info(
         "claude_watcher",
         format!("scanning Claude sessions at {}", sessions_dir.display()),
     );
 
-    if let Ok(entries) = scan_session_files(&sessions_dir) {
-        for (file_name, session) in entries {
-            if is_process_alive(session.pid) {
-                let tracked_session = TrackedSession {
-                    session_id: session.session_id.clone(),
-                    cwd: PathBuf::from(&session.cwd),
-                    pid: session.pid,
-                    file_name,
-                    last_seen_alive: std::time::Instant::now(),
-                    status: Status::Working,
-                };
-                log_info(
-                    "claude_watcher",
-                    format!(
-                        "restored existing Claude session {} (pid={}) at {}",
-                        session.session_id, session.pid, session.cwd
-                    ),
-                );
-                aggregator.add_session(
-                    session.session_id.clone(),
-                    Tool::ClaudeCode,
-                    &tracked_session.cwd,
-                    Status::Working,
-                );
-                tracked.insert(session.session_id, tracked_session);
-            }
-        }
-    }
-
     loop {
-        // Poll for new/changed session files
         if let Ok(entries) = scan_session_files(&sessions_dir) {
-            let mut seen_ids = std::collections::HashSet::new();
+            let mut seen_file_names: HashMap<String, bool> = HashMap::new();
 
-            for (_file_name, session) in entries {
-                seen_ids.insert(session.session_id.clone());
+            for (file_name, session) in &entries {
+                seen_file_names.insert(file_name.clone(), true);
 
-                if let Some(existing) = tracked.get_mut(&session.session_id) {
-                    // Update pid if it changed (session reused same ID)
-                    if existing.pid != session.pid {
+                // Skip sessions already tracked by hooks
+                if aggregator.session_status(&session.session_id).is_some() {
+                    tracked.remove(&session.session_id);
+                    continue;
+                }
+
+                if tracked.contains_key(&session.session_id) {
+                    // Already tracked by us, update pid if needed
+                    if let Some(existing) = tracked.get_mut(&session.session_id) {
                         existing.pid = session.pid;
-                        existing.last_seen_alive = std::time::Instant::now();
                     }
-                } else if is_process_alive(session.pid) {
-                    // New session discovered
-                    let tracked_session = TrackedSession {
-                        session_id: session.session_id.clone(),
-                        cwd: PathBuf::from(&session.cwd),
-                        pid: session.pid,
-                        file_name: String::new(),
-                        last_seen_alive: std::time::Instant::now(),
-                        status: Status::Working,
-                    };
+                    continue;
+                }
+
+                // New session not tracked by hooks or us
+                if is_process_alive(session.pid) {
                     log_info(
                         "claude_watcher",
                         format!(
-                            "discovered new Claude session {} (pid={}) at {}",
+                            "restored Claude session {} (pid={}) at {}",
                             session.session_id, session.pid, session.cwd
                         ),
                     );
+                    let cwd = PathBuf::from(&session.cwd);
                     aggregator.add_session(
                         session.session_id.clone(),
                         Tool::ClaudeCode,
-                        &tracked_session.cwd,
+                        &cwd,
                         Status::Working,
                     );
-                    tracked.insert(session.session_id, tracked_session);
+                    tracked.insert(
+                        session.session_id.clone(),
+                        TrackedSession {
+                            session_id: session.session_id.clone(),
+                            cwd: PathBuf::from(&session.cwd),
+                            pid: session.pid,
+                            file_name: file_name.clone(),
+                        },
+                    );
                 }
             }
 
-            // Check alive status and handle dead sessions
-            let dead_sessions: Vec<String> = tracked
+            // Handle dead sessions: file removed or process dead
+            let dead_ids: Vec<String> = tracked
                 .iter()
                 .filter(|(id, session)| {
-                    // If the session file is gone, the session ended cleanly
-                    let file_exists = sessions_dir.join(&session.file_name).exists();
-                    if !file_exists {
+                    // Session file removed → ended cleanly
+                    if !seen_file_names.contains_key(&session.file_name) {
                         return true;
                     }
-                    !seen_ids.contains(*id) || !is_process_alive(session.pid)
+                    // Process no longer alive
+                    !is_process_alive(session.pid)
                 })
                 .map(|(id, _)| id.clone())
                 .collect();
 
-            for session_id in dead_sessions {
+            for session_id in dead_ids {
                 if let Some(session) = tracked.remove(&session_id) {
                     log_info(
                         "claude_watcher",
                         format!(
-                            "Claude session {} (pid={}) terminated, marking as done",
+                            "Claude session {} (pid={}) terminated",
                             session.session_id, session.pid
                         ),
                     );
-                    // The hook may have already handled stop/end events,
-                    // so only update if it's still in Working/Waiting status
+                    // Only mark Done if hooks haven't already handled it
                     if let Some(current) = aggregator.session_status(&session_id) {
                         if current != Status::Done {
                             aggregator.update_session_status(&session_id, Status::Done);
                         }
                     }
                 }
-            }
-        }
-
-        // Check for stale working sessions
-        let now = std::time::Instant::now();
-        for session in tracked.values_mut() {
-            if is_process_alive(session.pid) {
-                session.last_seen_alive = now;
-            }
-
-            let elapsed = now.duration_since(session.last_seen_alive);
-            if session.status == Status::Working && elapsed >= STALE_WORKING_AFTER {
-                log_warn(
-                    "claude_watcher",
-                    format!(
-                        "Claude session {} (pid={}) stale for {}s, marking as waiting",
-                        session.session_id,
-                        session.pid,
-                        elapsed.as_secs()
-                    ),
-                );
-                session.status = Status::Waiting;
-                aggregator.update_session_status(&session.session_id, Status::Waiting);
             }
         }
 
@@ -242,9 +194,7 @@ fn is_process_alive(pid: i32) -> bool {
 
     #[cfg(windows)]
     {
-        // Use raw kernel32 FFI to check if a process is still running
         const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
-        const INVALID_HANDLE_VALUE: *mut std::ffi::c_void = (-1isize) as *mut std::ffi::c_void;
 
         #[link(name = "kernel32")]
         extern "system" {
@@ -260,7 +210,7 @@ fn is_process_alive(pid: i32) -> bool {
             OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid as u32)
         };
 
-        if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+        if handle.is_null() {
             return false;
         }
 
