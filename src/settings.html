@@ -1,93 +1,93 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Deva Light Settings</title>
+    <title>Deva Light 设置</title>
     <link rel="stylesheet" href="settings.css" />
   </head>
   <body>
     <main class="settings">
       <header>
-        <h1>Deva Light Settings</h1>
+        <h1>Deva Light 设置</h1>
         <p id="config-path"></p>
       </header>
 
       <section class="group">
-        <h2>Window</h2>
+        <h2>窗口</h2>
         <section class="field">
-          <label for="always-on-top">Always on Top</label>
+          <label for="always-on-top">始终置顶</label>
           <input id="always-on-top" type="checkbox" checked />
-          <span class="hint">Keep window visible above all other windows</span>
+          <span class="hint">保持窗口在所有其他窗口之上</span>
         </section>
       </section>
 
       <section class="group">
-        <h2>Notifications</h2>
+        <h2>通知</h2>
         <section class="field">
-          <label for="notifications-enabled">Enable Notifications</label>
+          <label for="notifications-enabled">启用通知</label>
           <input id="notifications-enabled" type="checkbox" checked />
         </section>
         <section class="field">
-          <label for="notify-waiting">Notify on Waiting</label>
+          <label for="notify-waiting">等待时通知</label>
           <input id="notify-waiting" type="checkbox" checked />
-          <span class="hint">Show notification when AI needs attention</span>
+          <span class="hint">当 AI 需要注意时显示通知</span>
         </section>
         <section class="field">
-          <label for="notify-done">Notify on Done</label>
+          <label for="notify-done">完成时通知</label>
           <input id="notify-done" type="checkbox" />
-          <span class="hint">Show notification when task completes</span>
+          <span class="hint">当任务完成时显示通知</span>
         </section>
       </section>
 
       <section class="group">
-        <h2>Network</h2>
+        <h2>网络</h2>
         <section class="field">
-          <label for="http-bind">Network</label>
+          <label for="http-bind">网络模式</label>
           <select id="http-bind">
-            <option value="127.0.0.1">Local only</option>
-            <option value="0.0.0.0">LAN forwarding</option>
+            <option value="127.0.0.1">仅本地</option>
+            <option value="0.0.0.0">局域网转发</option>
           </select>
-          <span class="hint">Use "LAN forwarding" for WSL/remote monitoring</span>
+          <span class="hint">WSL/远程监控请选择「局域网转发」</span>
         </section>
 
         <section class="field">
-          <label for="http-port">Port</label>
-          <input id="http-port" type="number" min="1" max="65535" placeholder="Auto" />
-          <span class="hint">Leave empty for automatic port assignment</span>
+          <label for="http-port">端口</label>
+          <input id="http-port" type="number" min="1" max="65535" placeholder="自动" />
+          <span class="hint">留空则自动分配端口</span>
         </section>
 
         <dl>
           <div>
-            <dt>Active port</dt>
-            <dd id="runtime-port">Unknown</dd>
+            <dt>当前端口</dt>
+            <dd id="runtime-port">未知</dd>
           </div>
         </dl>
       </section>
 
       <section class="group">
-        <h2>Codex Monitoring</h2>
+        <h2>Codex 监控</h2>
         <section class="field field-stack">
-          <label for="codex-manual-paths">Custom Roots</label>
+          <label for="codex-manual-paths">自定义路径</label>
           <textarea
             id="codex-manual-paths"
             rows="4"
-            placeholder="One sessions path per line"
+            placeholder="每行一个 sessions 路径"
           ></textarea>
           <span class="hint">
-            Add the folder that contains your `YYYY/MM/DD/rollout-*.jsonl` files when auto-detection misses them.
+            当自动检测不到时，手动添加包含 `YYYY/MM/DD/rollout-*.jsonl` 文件的目录。
           </span>
         </section>
 
         <dl class="path-summary">
           <div>
-            <dt>Detected now</dt>
+            <dt>已检测到</dt>
             <dd>
               <ul id="codex-detected-paths" class="path-list"></ul>
             </dd>
           </div>
           <div>
-            <dt>Missing</dt>
+            <dt>缺失路径</dt>
             <dd>
               <ul id="codex-missing-paths" class="path-list"></ul>
             </dd>
@@ -95,52 +95,52 @@
         </dl>
 
         <p class="hint hint-block">
-          Examples: `C:\Users\you\.codex\sessions`, `\\wsl.localhost\Ubuntu\home\you\.codex\sessions`,
-          `/Users/you/.codex/sessions`, `/home/you/.codex/sessions`
+          示例：`C:\Users\you\.codex\sessions`、`\\wsl.localhost\Ubuntu\home\you\.codex\sessions`、
+          `/Users/you/.codex/sessions`、`/home/you/.codex/sessions`
         </p>
       </section>
 
       <section class="group">
-        <h2>Claude Integration</h2>
+        <h2>Claude 集成</h2>
         <section class="integration">
           <button id="install-integration" type="button">
-            Install Claude Integration
+            安装 Claude 集成
           </button>
           <button id="remove-integration" class="danger" type="button">
-            Remove Claude Integration
+            移除 Claude 集成
           </button>
         </section>
       </section>
 
       <section class="group">
-        <h2>Uninstall</h2>
+        <h2>卸载</h2>
         <section class="integration">
           <button id="prepare-uninstall" class="danger" type="button">
-            Prepare for Uninstall
+            准备卸载
           </button>
-          <span class="hint">Clean up hooks and config files before uninstalling</span>
+          <span class="hint">卸载前清理钩子和配置文件</span>
         </section>
       </section>
 
       <section class="group">
-        <h2>Diagnostics</h2>
+        <h2>诊断信息</h2>
         <section class="integration diagnostics-actions">
-          <button id="refresh-diagnostics" type="button">Refresh Diagnostics</button>
-          <button id="copy-diagnostics" type="button">Copy Diagnostics</button>
-          <button id="open-app-log" type="button">Open App Log</button>
+          <button id="refresh-diagnostics" type="button">刷新诊断</button>
+          <button id="copy-diagnostics" type="button">复制诊断</button>
+          <button id="open-app-log" type="button">打开日志</button>
         </section>
 
         <section class="field field-stack">
-          <label for="recent-log">Recent Log</label>
-          <pre id="recent-log">(loading)</pre>
+          <label for="recent-log">最近日志</label>
+          <pre id="recent-log">(加载中)</pre>
         </section>
       </section>
 
       <div id="status" role="status"></div>
 
       <footer>
-        <button id="save" class="primary" type="button">Save</button>
-        <button id="close" type="button">Close</button>
+        <button id="save" class="primary" type="button">保存</button>
+        <button id="close" type="button">关闭</button>
       </footer>
     </main>
     <script src="settings.js"></script>

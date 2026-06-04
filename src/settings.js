@@ -49,7 +49,7 @@ async function loadSettings() {
     bindSelect.value = config.httpBind;
     portInput.value = config.httpPort ?? "";
     configPath.textContent = config.configPath;
-    runtimePort.textContent = config.runtimePort ? String(config.runtimePort) : "Not running";
+    runtimePort.textContent = config.runtimePort ? String(config.runtimePort) : "未运行";
 
     // Window settings
     alwaysOnTopCheckbox.checked = config.alwaysOnTop ?? true;
@@ -92,7 +92,7 @@ async function saveSettings() {
     await invoke("set_always_on_top", { enabled: alwaysOnTopCheckbox.checked });
     await refreshDiagnostics();
 
-    setStatus("Saved. Codex watcher reloads path changes within about 1 second.");
+    setStatus("已保存。Codex 监控器将在约 1 秒后重载路径变更。");
   } catch (error) {
     setStatus(String(error), true);
   } finally {
@@ -105,7 +105,7 @@ async function installIntegration() {
 
   try {
     await invoke("install_hooks_command");
-    setStatus("Claude integration installed. Restart Claude Code to apply.");
+    setStatus("Claude 集成已安装。请重启 Claude Code 以生效。");
   } catch (error) {
     setStatus(String(error), true);
   } finally {
@@ -115,7 +115,7 @@ async function installIntegration() {
 
 async function removeIntegration() {
   const confirmed = confirm(
-    "Remove Deva Light hooks from Claude Code settings and delete the hook helper?",
+    "确定要从 Claude Code 设置中移除 Deva Light 钩子并删除辅助程序吗？",
   );
   if (!confirmed) return;
 
@@ -123,7 +123,7 @@ async function removeIntegration() {
 
   try {
     await invoke("remove_hooks_command");
-    setStatus("Claude integration removed. Restart Claude Code to apply.");
+    setStatus("Claude 集成已移除。请重启 Claude Code 以生效。");
   } catch (error) {
     setStatus(String(error), true);
   } finally {
@@ -133,18 +133,18 @@ async function removeIntegration() {
 
 async function prepareUninstall() {
   const choice = confirm(
-    "Choose uninstall cleanup mode:\n\n" +
-    "Click OK for FULL CLEANUP (remove all config files)\n" +
-    "Click Cancel for KEEP CONFIG (only remove hooks and runtime files)\n\n" +
-    "Recommended: Full cleanup for complete removal."
+    "选择卸载清理模式：\n\n" +
+    "点击「确定」进行完整清理（删除所有配置文件）\n" +
+    "点击「取消」保留配置（仅移除钩子和运行时文件）\n\n" +
+    "推荐：完整清理以彻底删除。"
   );
 
   const keepConfig = !choice; // OK = full cleanup (keepConfig=false), Cancel = keep config
 
   const finalConfirm = confirm(
     keepConfig
-      ? "This will remove Claude hooks and runtime files, but keep your config.json for future reinstall.\n\nProceed?"
-      : "This will completely remove all Deva Light data including hooks, config, and logs.\n\nProceed?"
+      ? "这将移除 Claude 钩子和运行时文件，但保留 config.json 以便将来重新安装。\n\n确定继续？"
+      : "这将完全删除所有 Deva Light 数据，包括钩子、配置和日志。\n\n确定继续？"
   );
 
   if (!finalConfirm) return;
@@ -155,8 +155,8 @@ async function prepareUninstall() {
     await invoke("prepare_uninstall", { keepConfig });
     setStatus(
       keepConfig
-        ? "Partial cleanup complete. You can now uninstall the app. Config preserved for reinstall."
-        : "Full cleanup complete. You can now uninstall the app."
+        ? "部分清理完成。现在可以卸载应用。配置文件已保留以便重新安装。"
+        : "完整清理完成。现在可以卸载应用。"
     );
   } catch (error) {
     setStatus(String(error), true);
@@ -172,14 +172,14 @@ async function refreshDiagnostics() {
   renderPathList(
     codexDetectedPaths,
     diagnostics?.codex_sessions_paths,
-    "No reachable Codex session roots right now.",
+    "当前无可用的 Codex 会话路径。",
   );
   renderPathList(
     codexMissingPaths,
     diagnostics?.codex_missing_paths,
-    "No missing configured paths.",
+    "无缺失路径。",
   );
-  recentLog.textContent = diagnostics?.recent_log || "(empty)";
+  recentLog.textContent = diagnostics?.recent_log || "(空)";
 }
 
 async function copyDiagnostics() {
@@ -190,11 +190,11 @@ async function copyDiagnostics() {
   const text = diagnosticsText(lastDiagnostics);
   if (navigator.clipboard) {
     await navigator.clipboard.writeText(text);
-    setStatus("Diagnostics copied.");
+    setStatus("诊断信息已复制。");
     return;
   }
 
-  setStatus("Clipboard is not available in this window.", true);
+  setStatus("此窗口无法访问剪贴板。", true);
 }
 
 async function openAppLog() {
@@ -211,7 +211,7 @@ function parsePort() {
 
   const port = Number(value);
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    setStatus("Port must be blank or between 1 and 65535.", true);
+    setStatus("端口必须为空或 1~65535 之间的整数。", true);
     portInput.focus();
     return false;
   }
@@ -255,7 +255,7 @@ function renderPathList(container, values, emptyLabel) {
 
 function diagnosticsText(diagnostics) {
   if (!diagnostics) {
-    return "Diagnostics unavailable.";
+    return "诊断信息不可用。";
   }
 
   const codexSessionPaths = Array.isArray(diagnostics.codex_sessions_paths)
@@ -269,28 +269,28 @@ function diagnosticsText(diagnostics) {
     : [];
 
   return [
-    "Deva Light Diagnostics",
+    "Deva Light 诊断信息",
     "",
-    `Config: ${diagnostics.config_dir}`,
-    `Runtime: ${diagnostics.runtime_path}`,
-    `Lock: ${diagnostics.lock_path}`,
-    `Log: ${diagnostics.log_path}`,
-    `Claude settings: ${diagnostics.claude_settings_path}`,
-    `Hook binary: ${diagnostics.hook_binary_path}`,
-    `Codex sessions: ${codexSessionPaths[0] || "(none)"}`,
+    `配置目录: ${diagnostics.config_dir}`,
+    `运行时: ${diagnostics.runtime_path}`,
+    `锁文件: ${diagnostics.lock_path}`,
+    `日志: ${diagnostics.log_path}`,
+    `Claude 设置: ${diagnostics.claude_settings_path}`,
+    `钩子程序: ${diagnostics.hook_binary_path}`,
+    `Codex 会话: ${codexSessionPaths[0] || "(无)"}`,
     ...codexSessionPaths.slice(1).map((path) => `  - ${path}`),
-    `Codex manual: ${codexManualPaths[0] || "(none)"}`,
+    `Codex 自定义: ${codexManualPaths[0] || "(无)"}`,
     ...codexManualPaths.slice(1).map((path) => `  - ${path}`),
-    `Codex missing: ${codexMissingPaths[0] || "(none)"}`,
+    `Codex 缺失: ${codexMissingPaths[0] || "(无)"}`,
     ...codexMissingPaths.slice(1).map((path) => `  - ${path}`),
     "",
-    `Hooks installed: ${diagnostics.hooks_installed}`,
-    `Hook binary exists: ${diagnostics.hook_binary_exists}`,
-    `Runtime exists: ${diagnostics.runtime_exists}`,
-    `Light count: ${diagnostics.light_count}`,
+    `钩子已安装: ${diagnostics.hooks_installed}`,
+    `钩子程序存在: ${diagnostics.hook_binary_exists}`,
+    `运行时存在: ${diagnostics.runtime_exists}`,
+    `灯组数量: ${diagnostics.light_count}`,
     "",
-    "Recent log:",
-    diagnostics.recent_log || "(empty)",
+    "最近日志:",
+    diagnostics.recent_log || "(空)",
   ].join("\n");
 }
 

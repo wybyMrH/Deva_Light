@@ -119,8 +119,8 @@ fn main() {
                         if should_notify {
                             let title = format!("Deva Light - {}", light.project_label);
                             let body = match light.status {
-                                Status::Waiting => "AI needs your attention".to_string(),
-                                Status::Done => "Task completed".to_string(),
+                                Status::Waiting => "AI 需要您的关注".to_string(),
+                                Status::Done => "任务已完成".to_string(),
                                 _ => String::new(),
                             };
                             let _ = app_handle.emit("notify-status", (title, body));
@@ -132,6 +132,7 @@ fn main() {
             start_http_server(Arc::clone(&server_aggregator), &app_config)
                 .map_err(|error| std::io::Error::other(error.to_string()))?;
             deva_light::codex_watcher::start_codex_watcher(Arc::clone(&aggregator))?;
+            deva_light::claude_watcher::start_claude_watcher(Arc::clone(&aggregator));
             log_info("app", "watchers started");
 
             window.emit("state-changed", aggregator.get_lights())?;
@@ -161,9 +162,9 @@ fn main() {
 }
 
 fn setup_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    let show = MenuItem::with_id(app, "show", "Show Window", true, None::<&str>)?;
-    let settings = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+    let show = MenuItem::with_id(app, "show", "显示窗口", true, None::<&str>)?;
+    let settings = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
 
     let menu = Menu::with_items(app, &[&show, &settings, &quit])?;
 

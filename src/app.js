@@ -127,7 +127,7 @@ function createAppHandle() {
   const root = createLightElement({
     label: "Deva Light",
     status: "Standby",
-    title: "Deva Light\nClick to open settings",
+    title: "Deva Light\n点击打开设置",
     standby: true,
   });
   root.classList.add("traffic-light--app");
@@ -139,8 +139,8 @@ function createAppHandle() {
   root.addEventListener("contextmenu", (event) => {
     event.preventDefault();
     showMenu(event.clientX, event.clientY, [
-      ["Settings", () => safeInvoke("open_settings")],
-      ["Quit", () => safeInvoke("quit_app")],
+      ["设置", () => safeInvoke("open_settings")],
+      ["退出", () => safeInvoke("quit_app")],
     ]);
   });
 
@@ -184,10 +184,10 @@ function createProjectLight(lightState) {
     event.preventDefault();
     const projectId = root.dataset.projectId;
     showMenu(event.clientX, event.clientY, [
-      ["Open", () => safeInvoke("open_project", { projectId })],
-      ["Copy Path", () => copyProjectPath(projectId)],
-      ["Settings", () => safeInvoke("open_settings")],
-      ["Remove", () => safeInvoke("remove_light", { projectId })],
+      ["打开", () => safeInvoke("open_project", { projectId })],
+      ["复制路径", () => copyProjectPath(projectId)],
+      ["设置", () => safeInvoke("open_settings")],
+      ["移除", () => safeInvoke("remove_light", { projectId })],
     ]);
   });
 
@@ -274,7 +274,7 @@ function tooltipFor(lightState) {
 function showMenu(x, y, items) {
   menu.replaceChildren();
 
-  for (const [label, action, className] of [["Close", hideMenu, "menu-close"], ...items]) {
+  for (const [label, action, className] of [["关闭", hideMenu, "menu-close"], ...items]) {
     const item = document.createElement("button");
     item.type = "button";
     item.textContent = label;
@@ -439,28 +439,28 @@ async function showDiagnostics() {
     : [];
 
   const text = [
-    "AI Light Diagnostics",
+    "Deva Light 诊断信息",
     "",
-    `Config: ${diagnostics.config_dir}`,
-    `Runtime: ${diagnostics.runtime_path}`,
-    `Lock: ${diagnostics.lock_path}`,
-    `Log: ${diagnostics.log_path}`,
-    `Claude settings: ${diagnostics.claude_settings_path}`,
-    `Hook binary: ${diagnostics.hook_binary_path}`,
-    `Codex sessions: ${codexSessionPaths[0] || "(none)"}`,
+    `配置目录: ${diagnostics.config_dir}`,
+    `运行时: ${diagnostics.runtime_path}`,
+    `锁文件: ${diagnostics.lock_path}`,
+    `日志: ${diagnostics.log_path}`,
+    `Claude 设置: ${diagnostics.claude_settings_path}`,
+    `钩子程序: ${diagnostics.hook_binary_path}`,
+    `Codex 会话: ${codexSessionPaths[0] || "(无)"}`,
     ...codexSessionPaths.slice(1).map((path) => `  - ${path}`),
-    `Codex manual: ${codexManualPaths[0] || "(none)"}`,
+    `Codex 自定义: ${codexManualPaths[0] || "(无)"}`,
     ...codexManualPaths.slice(1).map((path) => `  - ${path}`),
-    `Codex missing: ${codexMissingPaths[0] || "(none)"}`,
+    `Codex 缺失: ${codexMissingPaths[0] || "(无)"}`,
     ...codexMissingPaths.slice(1).map((path) => `  - ${path}`),
     "",
-    `Hooks installed: ${diagnostics.hooks_installed}`,
-    `Hook binary exists: ${diagnostics.hook_binary_exists}`,
-    `Runtime exists: ${diagnostics.runtime_exists}`,
-    `Light count: ${diagnostics.light_count}`,
+    `钩子已安装: ${diagnostics.hooks_installed}`,
+    `钩子程序存在: ${diagnostics.hook_binary_exists}`,
+    `运行时存在: ${diagnostics.runtime_exists}`,
+    `灯组数量: ${diagnostics.light_count}`,
     "",
-    "Recent log:",
-    diagnostics.recent_log || "(empty)",
+    "最近日志:",
+    diagnostics.recent_log || "(空)",
   ].join("\n");
 
   if (navigator.clipboard) {

@@ -23,7 +23,7 @@ export function createDrawer() {
 
   const title = document.createElement("span");
   title.className = "drawer-title";
-  title.textContent = "Sessions";
+  title.textContent = "会话列表";
 
   const closeBtn = document.createElement("button");
   closeBtn.className = "drawer-close";
