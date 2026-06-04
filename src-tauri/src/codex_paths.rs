@@ -149,8 +149,16 @@ fn windows_wsl_codex_sessions_dir(distro: Option<&str>) -> Option<PathBuf> {
 }
 
 #[cfg(target_os = "windows")]
-fn run_wsl_command(args: &[&str]) -> Vec<u8> {
-    let Ok(output) = std::process::Command::new("wsl.exe").args(args).output() else {
+pub(crate) fn run_wsl_command(args: &[&str]) -> Vec<u8> {
+    use std::os::windows::process::CommandExt;
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    let Ok(output) = std::process::Command::new("wsl.exe")
+        .creation_flags(CREATE_NO_WINDOW)
+        .args(args)
+        .output()
+    else {
         return Vec::new();
     };
 
@@ -162,7 +170,7 @@ fn run_wsl_command(args: &[&str]) -> Vec<u8> {
 }
 
 #[cfg(any(test, target_os = "windows"))]
-fn path_from_console_output(bytes: &[u8]) -> Option<PathBuf> {
+pub(crate) fn path_from_console_output(bytes: &[u8]) -> Option<PathBuf> {
     decode_console_text(bytes).lines().find_map(|line| {
         let trimmed = line.trim();
         (!trimmed.is_empty()).then(|| PathBuf::from(trimmed))
@@ -170,7 +178,7 @@ fn path_from_console_output(bytes: &[u8]) -> Option<PathBuf> {
 }
 
 #[cfg(any(test, target_os = "windows"))]
-fn parse_wsl_distro_list(bytes: &[u8]) -> Vec<String> {
+pub(crate) fn parse_wsl_distro_list(bytes: &[u8]) -> Vec<String> {
     decode_console_text(bytes)
         .lines()
         .filter_map(|line| {

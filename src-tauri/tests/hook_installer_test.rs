@@ -1,4 +1,7 @@
-use deva_light::hook_installer::{hook_binary_is_current, merge_hooks, remove_ai_light_hooks};
+use deva_light::hook_installer::{
+    hook_binary_is_current, merge_hooks, merge_wsl_hooks, remove_ai_light_hooks,
+    windows_path_to_wsl_path,
+};
 use serde_json::json;
 use std::path::Path;
 
@@ -104,6 +107,34 @@ fn merge_hooks_writes_event_as_args_to_avoid_shell_parsing() {
         r"C:\Users\kemp\.ai_light\bin\deva-light-hook.exe"
     );
     assert_eq!(hook["args"][0], "notification");
+}
+
+#[test]
+fn merge_wsl_hooks_embeds_ai_light_url_and_wsl_command() {
+    let merged = merge_wsl_hooks(
+        json!({}),
+        "/mnt/c/Users/Admin/.deva_light/bin/deva-light-hook.exe",
+        "http://127.0.0.1:55548/events",
+    )
+    .unwrap();
+    let hook = &merged["hooks"]["Notification"][0]["hooks"][0];
+
+    assert_eq!(
+        hook["command"],
+        "AI_LIGHT_URL='http://127.0.0.1:55548/events' '/mnt/c/Users/Admin/.deva_light/bin/deva-light-hook.exe' notification"
+    );
+}
+
+#[test]
+fn windows_hook_path_can_be_projected_into_wsl_mounts() {
+    let wsl_path = windows_path_to_wsl_path(Path::new(
+        r"C:\Users\Admin\.deva_light\bin\deva-light-hook.exe",
+    ));
+
+    assert_eq!(
+        wsl_path.as_deref(),
+        Some("/mnt/c/Users/Admin/.deva_light/bin/deva-light-hook.exe")
+    );
 }
 
 #[test]

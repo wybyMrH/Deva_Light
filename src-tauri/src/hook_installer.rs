@@ -1,3 +1,7 @@
+#[cfg(target_os = "windows")]
+use crate::codex_paths::{parse_wsl_distro_list, path_from_console_output, run_wsl_command};
+#[cfg(target_os = "windows")]
+use crate::config::load_runtime_config;
 use crate::logging::{log_info, log_warn};
 use serde_json::{json, Value};
 use std::fs;
@@ -121,6 +125,9 @@ pub fn install_hooks() -> Result<(), Box<dyn std::error::Error>> {
     fs::write(settings_path, serde_json::to_string_pretty(&merged)?)?;
     log_info("hook_installer", "installed Claude hooks");
 
+    #[cfg(target_os = "windows")]
+    install_wsl_hooks()?;
+
     Ok(())
 }
 
@@ -136,6 +143,9 @@ pub fn remove_hooks() -> Result<(), Box<dyn std::error::Error>> {
         )?;
         fs::write(&settings_path, serde_json::to_string_pretty(&cleaned)?)?;
     }
+
+    #[cfg(target_os = "windows")]
+    remove_wsl_hooks()?;
 
     let hook_path = get_hook_binary_path();
     if hook_path.exists() {
@@ -156,6 +166,105 @@ pub fn preview_hook_config() -> Result<String, String> {
 
     let merged = merge_hooks(existing, &get_hook_binary_path())?;
     serde_json::to_string_pretty(&merged).map_err(|e| e.to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn install_wsl_hooks() -> Result<(), Box<dyn std::error::Error>> {
+    let Some(runtime) = load_runtime_config() else {
+        log_warn(
+            "hook_installer",
+            "skipped WSL Claude hook install because runtime.json is unavailable",
+        );
+        return Ok(());
+    };
+
+    let Some(wsl_hook_path) = windows_path_to_wsl_path(&get_hook_binary_path()) else {
+        log_warn(
+            "hook_installer",
+            "skipped WSL Claude hook install because hook path could not be converted to a WSL path",
+        );
+        return Ok(());
+    };
+
+    let target_url = format!("http://127.0.0.1:{}/events", runtime.http_port);
+    let mut installed = 0usize;
+
+    for distro in parse_wsl_distro_list(&run_wsl_command(&["--list", "--quiet"])) {
+        let Some(settings_path) = wsl_claude_settings_path(&distro) else {
+            continue;
+        };
+
+        let existing = if settings_path.exists() {
+            read_settings_json(&settings_path)?
+        } else {
+            json!({})
+        };
+
+        if let Some(parent) = settings_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        if settings_path.exists() {
+            let backup_path = settings_path.with_extension("json.deva-light.bak");
+            let _ = fs::copy(&settings_path, backup_path);
+        }
+
+        let merged = merge_wsl_hooks(existing, &wsl_hook_path, &target_url)?;
+        fs::write(&settings_path, serde_json::to_string_pretty(&merged)?)?;
+        installed += 1;
+        log_info(
+            "hook_installer",
+            format!(
+                "installed WSL Claude hooks for distro {} at {}",
+                distro,
+                settings_path.display()
+            ),
+        );
+    }
+
+    if installed == 0 {
+        log_info(
+            "hook_installer",
+            "no WSL distros detected for Claude hook install",
+        );
+    }
+
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn remove_wsl_hooks() -> Result<(), Box<dyn std::error::Error>> {
+    let mut removed = 0usize;
+
+    for distro in parse_wsl_distro_list(&run_wsl_command(&["--list", "--quiet"])) {
+        let Some(settings_path) = wsl_claude_settings_path(&distro) else {
+            continue;
+        };
+        if !settings_path.exists() {
+            continue;
+        }
+
+        let existing = read_settings_json(&settings_path)?;
+        let cleaned = remove_ai_light_hooks(existing)?;
+        let backup_path = settings_path.with_extension("json.deva-light-remove.bak");
+        let _ = fs::copy(&settings_path, backup_path);
+        fs::write(&settings_path, serde_json::to_string_pretty(&cleaned)?)?;
+        removed += 1;
+        log_info(
+            "hook_installer",
+            format!(
+                "removed WSL Claude hooks for distro {} at {}",
+                distro,
+                settings_path.display()
+            ),
+        );
+    }
+
+    if removed == 0 {
+        log_info("hook_installer", "no WSL Claude hooks needed removal");
+    }
+
+    Ok(())
 }
 
 pub fn check_hooks_installed() -> bool {
@@ -280,6 +389,51 @@ pub fn hook_binary_is_current(source: &Path, destination: &Path) -> Result<bool,
     Ok(fs::read(source)? == fs::read(destination)?)
 }
 
+pub fn merge_wsl_hooks(
+    existing: Value,
+    hook_path: &str,
+    ai_light_url: &str,
+) -> Result<Value, String> {
+    if !existing.is_object() {
+        return Err("settings root must be a JSON object".to_string());
+    }
+
+    let mut existing = existing;
+    if existing.get("hooks").is_none() {
+        existing["hooks"] = json!({});
+    }
+
+    let hooks = existing
+        .get_mut("hooks")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| "settings hooks field must be a JSON object".to_string())?;
+
+    let command_prefix = format!(
+        "AI_LIGHT_URL={} {}",
+        sh_single_quote(ai_light_url),
+        sh_single_quote(hook_path)
+    );
+
+    for (claude_event, hook_event) in HOOK_EVENTS {
+        let event_hooks = hooks
+            .entry(claude_event.to_string())
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
+            .ok_or_else(|| format!("settings hooks.{claude_event} field must be an array"))?;
+
+        remove_existing_ai_light_hooks(event_hooks);
+        event_hooks.push(json!({
+            "matcher": "",
+            "hooks": [{
+                "type": "command",
+                "command": format!("{command_prefix} {hook_event}"),
+            }]
+        }));
+    }
+
+    Ok(existing)
+}
+
 fn read_settings_json(path: &Path) -> Result<Value, Box<dyn std::error::Error>> {
     let content = fs::read_to_string(path)?;
     let content = content.strip_prefix('\u{feff}').unwrap_or(&content);
@@ -290,4 +444,33 @@ fn home_dir() -> Option<PathBuf> {
     std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
         .map(PathBuf::from)
+}
+
+pub fn windows_path_to_wsl_path(path: &Path) -> Option<String> {
+    let raw = path.to_string_lossy();
+    let (drive, rest) = raw.split_once(':')?;
+    if drive.len() != 1 {
+        return None;
+    }
+
+    let drive = drive.chars().next()?.to_ascii_lowercase();
+    let rest = rest.trim_start_matches(['\\', '/']);
+    let rest = rest.replace('\\', "/");
+    Some(format!("/mnt/{drive}/{rest}"))
+}
+
+#[cfg(target_os = "windows")]
+fn wsl_claude_settings_path(distro: &str) -> Option<PathBuf> {
+    path_from_console_output(&run_wsl_command(&[
+        "-d",
+        distro,
+        "-e",
+        "sh",
+        "-lc",
+        r#"wslpath -w "$HOME/.claude/settings.json""#,
+    ]))
+}
+
+fn sh_single_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', r#"'"'"'"#))
 }
