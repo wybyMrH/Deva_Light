@@ -142,12 +142,9 @@ fn run_claude_watcher(aggregator: Arc<StateAggregator>) {
                     );
                     // The hook may have already handled stop/end events,
                     // so only update if it's still in Working/Waiting status
-                    if aggregator.session_status(&session_id).is_some() {
-                        // Don't override if the hook already set it to Done
-                        if let Some(current) = aggregator.session_status(&session_id) {
-                            if current != Status::Done {
-                                aggregator.update_session_status(&session_id, Status::Done);
-                            }
+                    if let Some(current) = aggregator.session_status(&session_id) {
+                        if current != Status::Done {
+                            aggregator.update_session_status(&session_id, Status::Done);
                         }
                     }
                 }
@@ -238,31 +235,36 @@ fn is_process_alive(pid: i32) -> bool {
         return false;
     }
 
-    // On Unix, kill(pid, 0) checks if the process exists
     #[cfg(unix)]
     {
         unsafe { libc::kill(pid, 0) == 0 }
     }
 
-    // On Windows, use OpenProcess
     #[cfg(windows)]
     {
-        use std::os::windows::io::FromRawHandle;
-        use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+        // Use raw kernel32 FFI to check if a process is still running
+        const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+        const INVALID_HANDLE_VALUE: *mut std::ffi::c_void = (-1isize) as *mut std::ffi::c_void;
 
-        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid as u32) };
-        if handle == 0 {
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn OpenProcess(
+                dwDesiredAccess: u32,
+                bInheritHandle: i32,
+                dwProcessId: u32,
+            ) -> *mut std::ffi::c_void;
+            fn CloseHandle(hObject: *mut std::ffi::c_void) -> i32;
+        }
+
+        let handle = unsafe {
+            OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid as u32)
+        };
+
+        if handle.is_null() || handle == INVALID_HANDLE_VALUE {
             return false;
         }
-        unsafe { windows_sys::Win32::Foundation::CloseHandle(handle) };
-        true
-    }
 
-    #[cfg(not(any(unix, windows)))]
-    {
-        // Fallback: try to check via /proc
-        std::path::Path::new("/proc")
-            .join(pid.to_string())
-            .exists()
+        unsafe { CloseHandle(handle) };
+        true
     }
 }
