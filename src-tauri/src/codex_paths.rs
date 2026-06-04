@@ -10,11 +10,18 @@ pub struct CodexSessionRootSummary {
 }
 
 pub fn codex_session_root_summary() -> CodexSessionRootSummary {
-    codex_session_root_summary_for_config(&load_app_config())
+    codex_session_root_summary_for_auto(&auto_codex_sessions_dirs(), &load_app_config())
 }
 
 pub fn codex_session_root_summary_for_config(config: &AppConfig) -> CodexSessionRootSummary {
-    let auto = auto_codex_sessions_dirs();
+    codex_session_root_summary_for_auto(&auto_codex_sessions_dirs(), config)
+}
+
+pub fn codex_session_root_summary_for_auto(
+    auto_roots: &[PathBuf],
+    config: &AppConfig,
+) -> CodexSessionRootSummary {
+    let auto = auto_roots.to_vec();
     let manual = parse_manual_codex_sessions_dirs(config);
 
     let mut candidates = auto.clone();
@@ -78,7 +85,7 @@ fn parse_manual_codex_sessions_dirs(config: &AppConfig) -> Vec<PathBuf> {
     paths
 }
 
-fn auto_codex_sessions_dirs() -> Vec<PathBuf> {
+pub fn auto_codex_sessions_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     push_unique(&mut dirs, default_codex_sessions_dir());
 
@@ -247,6 +254,23 @@ mod tests {
         assert!(summary.missing.contains(&missing));
 
         let _ = fs::remove_dir_all(existing);
+    }
+
+    #[test]
+    fn cached_auto_paths_are_classified_without_redetecting() {
+        let auto = std::env::temp_dir().join(unique_name("ai-light-codex-auto-existing"));
+        let missing = std::env::temp_dir().join(unique_name("ai-light-codex-auto-missing"));
+        fs::create_dir_all(&auto).unwrap();
+
+        let summary = codex_session_root_summary_for_auto(
+            &[auto.clone(), missing.clone()],
+            &AppConfig::default(),
+        );
+        assert_eq!(summary.auto, vec![auto.clone(), missing.clone()]);
+        assert!(summary.active.contains(&auto));
+        assert!(summary.missing.contains(&missing));
+
+        let _ = fs::remove_dir_all(auto);
     }
 
     fn unique_name(prefix: &str) -> String {

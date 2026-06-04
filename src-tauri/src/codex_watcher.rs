@@ -1,5 +1,8 @@
 use crate::aggregator::StateAggregator;
-use crate::codex_paths::{codex_session_root_summary, CodexSessionRootSummary};
+use crate::codex_paths::{
+    auto_codex_sessions_dirs, codex_session_root_summary_for_auto, CodexSessionRootSummary,
+};
+use crate::config::load_app_config;
 use crate::logging::{log_error, log_info, log_warn};
 use crate::types::{Status, Tool};
 use serde_json::Value;
@@ -49,11 +52,12 @@ pub fn start_codex_watcher(aggregator: Arc<StateAggregator>) -> io::Result<()> {
 fn run_codex_watcher(aggregator: Arc<StateAggregator>) {
     let mut files = HashMap::new();
     let mut baseline = true;
-    let mut roots = codex_session_root_summary();
+    let auto_roots = auto_codex_sessions_dirs();
+    let mut roots = codex_session_root_summary_for_auto(&auto_roots, &load_app_config());
     log_root_summary("watching Codex session roots", &roots);
 
     loop {
-        let next_roots = codex_session_root_summary();
+        let next_roots = codex_session_root_summary_for_auto(&auto_roots, &load_app_config());
         if next_roots != roots {
             log_root_summary("reloaded Codex session roots", &next_roots);
             roots = next_roots;
@@ -76,9 +80,10 @@ fn poll_codex_sessions(
 ) -> io::Result<()> {
     let mut rollouts = Vec::new();
     let mut seen = HashSet::new();
+    let tracked_paths = files.keys().cloned().collect::<HashSet<_>>();
 
     for root in roots {
-        for path in find_rollout_files(root)? {
+        for path in find_rollout_files(root, &tracked_paths)? {
             if seen.insert(path.clone()) {
                 rollouts.push(path);
             }
@@ -95,7 +100,8 @@ fn poll_rollout_root(
     baseline: bool,
     root: &Path,
 ) -> io::Result<()> {
-    let rollouts = find_rollout_files(&root)?;
+    let tracked_paths = files.keys().cloned().collect::<HashSet<_>>();
+    let rollouts = find_rollout_files(&root, &tracked_paths)?;
     poll_rollout_paths(aggregator, files, baseline, rollouts)
 }
 
@@ -205,11 +211,11 @@ fn restore_existing_rollout(
         return Ok(());
     };
 
-    let mut status = watched.last_status.unwrap_or(Status::Idle);
-    if age >= REMOVE_INACTIVE_AFTER && status != Status::Working {
+    if age >= REMOVE_INACTIVE_AFTER {
         return Ok(());
     }
 
+    let mut status = watched.last_status.unwrap_or(Status::Idle);
     if status == Status::Working && age >= STALE_WORKING_AFTER {
         status = Status::Waiting;
     }
@@ -459,32 +465,55 @@ pub fn parse_codex_line(line: &str) -> serde_json::Result<CodexLineEvent> {
     }
 }
 
-fn find_rollout_files(root: &Path) -> io::Result<Vec<PathBuf>> {
+fn find_rollout_files(root: &Path, tracked_paths: &HashSet<PathBuf>) -> io::Result<Vec<PathBuf>> {
     let mut files = Vec::new();
 
     if !root.exists() {
         return Ok(files);
     }
 
-    collect_rollout_files(root, &mut files)?;
+    collect_rollout_files(root, tracked_paths, &mut files)?;
     files.sort();
     Ok(files)
 }
 
-fn collect_rollout_files(dir: &Path, files: &mut Vec<PathBuf>) -> io::Result<()> {
+fn collect_rollout_files(
+    dir: &Path,
+    tracked_paths: &HashSet<PathBuf>,
+    files: &mut Vec<PathBuf>,
+) -> io::Result<()> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
         let file_type = entry.file_type()?;
 
         if file_type.is_dir() {
-            collect_rollout_files(&path, files)?;
-        } else if file_type.is_file() && is_rollout_file(&path) {
+            collect_rollout_files(&path, tracked_paths, files)?;
+        } else if file_type.is_file()
+            && is_rollout_file(&path)
+            && should_track_rollout_file(&path, tracked_paths)
+        {
             files.push(path);
         }
     }
 
     Ok(())
+}
+
+fn should_track_rollout_file(path: &Path, tracked_paths: &HashSet<PathBuf>) -> bool {
+    if tracked_paths.contains(path) {
+        return true;
+    }
+
+    let Ok(modified) = fs::metadata(path).and_then(|metadata| metadata.modified()) else {
+        return true;
+    };
+
+    let Ok(age) = SystemTime::now().duration_since(modified) else {
+        return true;
+    };
+
+    age < REMOVE_INACTIVE_AFTER
 }
 
 fn is_rollout_file(path: &Path) -> bool {
@@ -758,6 +787,42 @@ mod tests {
     }
 
     #[test]
+    fn baseline_existing_stale_working_rollout_is_not_restored() {
+        let root = std::env::temp_dir().join(unique_name("ai-light-codex-root"));
+        let project = std::env::temp_dir().join(unique_name("ai-light-codex-project"));
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&project).unwrap();
+
+        let rollout = root.join("rollout-2026-05-31T00-00-00-s1.jsonl");
+        fs::write(
+            &rollout,
+            format!(
+                "{}\n{}\n",
+                json_line(
+                    "session_meta",
+                    &format!(r#"{{"id":"s1","cwd":"{}"}}"#, json_path(&project))
+                ),
+                json_line("event_msg", r#"{"type":"task_started"}"#)
+            ),
+        )
+        .unwrap();
+
+        let old_time = filetime::FileTime::from_system_time(
+            SystemTime::now() - REMOVE_INACTIVE_AFTER - Duration::from_secs(1),
+        );
+        filetime::set_file_mtime(&rollout, old_time).unwrap();
+
+        let aggregator = StateAggregator::new();
+        let mut files = HashMap::new();
+        poll_rollout_root(&aggregator, &mut files, true, &root).unwrap();
+
+        assert!(aggregator.get_lights().is_empty());
+
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
     fn polling_multiple_roots_restores_sessions_from_each_root() {
         let first_root = std::env::temp_dir().join(unique_name("ai-light-codex-root-a"));
         let second_root = std::env::temp_dir().join(unique_name("ai-light-codex-root-b"));
@@ -844,6 +909,35 @@ mod tests {
 
         let _ = fs::remove_dir_all(root);
         let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn initial_scan_skips_old_untracked_rollouts_but_keeps_tracked_ones() {
+        let root = std::env::temp_dir().join(unique_name("ai-light-codex-root"));
+        fs::create_dir_all(&root).unwrap();
+
+        let stale = root.join("rollout-2026-05-31T00-00-00-stale.jsonl");
+        let tracked = root.join("rollout-2026-05-31T00-00-00-tracked.jsonl");
+        let fresh = root.join("rollout-2026-05-31T00-00-00-fresh.jsonl");
+
+        for path in [&stale, &tracked, &fresh] {
+            fs::write(path, "").unwrap();
+        }
+
+        let old_time = filetime::FileTime::from_system_time(
+            SystemTime::now() - REMOVE_INACTIVE_AFTER - Duration::from_secs(1),
+        );
+        filetime::set_file_mtime(&stale, old_time).unwrap();
+        filetime::set_file_mtime(&tracked, old_time).unwrap();
+
+        let tracked_paths = HashSet::from([tracked.clone()]);
+        let rollouts = find_rollout_files(&root, &tracked_paths).unwrap();
+
+        assert!(rollouts.contains(&fresh));
+        assert!(rollouts.contains(&tracked));
+        assert!(!rollouts.contains(&stale));
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
