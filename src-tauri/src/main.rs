@@ -38,6 +38,7 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(Arc::clone(&aggregator))
         .manage(Arc::clone(&http_server))
         .manage(app_lock)
@@ -60,6 +61,10 @@ fn main() {
             ipc::get_monitoring_paused,
             ipc::get_ui_config,
             ipc::get_remote_setup_info,
+            ipc::get_app_version,
+            ipc::check_for_update,
+            ipc::download_and_install_update,
+            ipc::test_ssh_connection,
             ipc::persist_window_position,
             ipc::open_settings,
             ipc::resize_main_window,
@@ -189,6 +194,7 @@ fn main() {
             }
 
             log_info("app", "startup complete");
+            deva_light::updater::spawn_startup_update_check(app.handle());
             Ok(())
         })
         .run(tauri::generate_context!())
@@ -198,9 +204,10 @@ fn main() {
 fn setup_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let show = MenuItem::with_id(app, "show", "显示窗口", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
+    let update = MenuItem::with_id(app, "update", "检查更新", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
 
-    let menu = Menu::with_items(app, &[&show, &settings, &quit])?;
+    let menu = Menu::with_items(app, &[&show, &settings, &update, &quit])?;
 
     let app_handle = app.clone();
     TrayIconBuilder::new()
@@ -220,6 +227,9 @@ fn setup_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> 
                     let _ = win.show();
                     let _ = win.set_focus();
                 }
+            }
+            "update" => {
+                let _ = ipc::open_settings(app.clone(), Some("about".to_string()));
             }
             "quit" => {
                 app.exit(0);

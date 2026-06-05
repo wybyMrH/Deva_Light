@@ -53,6 +53,7 @@ pub struct AppConfigView {
     pub display_mode: String,
     pub remote_ssh_target: Option<String>,
     pub remote_codex_via_ssh: bool,
+    pub ssh_identity_file: Option<String>,
     pub http_token: Option<String>,
 }
 
@@ -76,6 +77,7 @@ pub struct AppConfigUpdate {
     pub display_mode: Option<String>,
     pub remote_ssh_target: Option<String>,
     pub remote_codex_via_ssh: Option<bool>,
+    pub ssh_identity_file: Option<String>,
     pub regenerate_http_token: Option<bool>,
 }
 
@@ -145,6 +147,7 @@ pub fn get_app_config() -> AppConfigView {
         display_mode: display_mode_to_string(&config.display_mode),
         remote_ssh_target: config.remote_ssh_target.clone(),
         remote_codex_via_ssh: config.remote_codex_via_ssh,
+        ssh_identity_file: config.ssh_identity_file.clone(),
         http_token: config.http_token.clone(),
     }
 }
@@ -199,6 +202,14 @@ pub fn save_app_config_command(
     }
     if let Some(remote_codex_via_ssh) = update.remote_codex_via_ssh {
         config.remote_codex_via_ssh = remote_codex_via_ssh;
+    }
+    if let Some(ssh_identity_file) = update.ssh_identity_file {
+        let trimmed = ssh_identity_file.trim().to_string();
+        config.ssh_identity_file = if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        };
     }
     if update.regenerate_http_token == Some(true) {
         config.http_token = Some(deva_light::config::generate_http_token());
@@ -341,6 +352,23 @@ pub fn get_monitoring_paused() -> bool {
 }
 
 #[tauri::command]
+pub fn get_app_version(app: AppHandle) -> String {
+    app.package_info().version.to_string()
+}
+
+#[tauri::command]
+pub async fn check_for_update(
+    app: AppHandle,
+) -> Result<Option<deva_light::updater::UpdateInfo>, String> {
+    deva_light::updater::check_for_update(&app).await
+}
+
+#[tauri::command]
+pub async fn download_and_install_update(app: AppHandle) -> Result<(), String> {
+    deva_light::updater::download_and_install(&app).await
+}
+
+#[tauri::command]
 pub fn get_remote_setup_info() -> Result<RemoteSetupInfo, String> {
     build_remote_setup_info()
 }
@@ -354,13 +382,33 @@ pub fn persist_window_position(x: i32, y: i32) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn open_settings(app: AppHandle) -> Result<(), String> {
+pub fn test_ssh_connection(
+    ssh_target: Option<String>,
+    ssh_identity_file: Option<String>,
+) -> deva_light::ssh_remote::SshConnectionTest {
+    let config = load_app_config();
+    let target = ssh_target
+        .filter(|value| !value.trim().is_empty())
+        .or(config.remote_ssh_target)
+        .unwrap_or_default();
+    let identity = ssh_identity_file
+        .filter(|value| !value.trim().is_empty())
+        .or(config.ssh_identity_file);
+
+    deva_light::ssh_remote::test_ssh_connection(&target, identity.as_deref())
+}
+
+#[tauri::command]
+pub fn open_settings(app: AppHandle, panel: Option<String>) -> Result<(), String> {
     let window = app
         .get_webview_window("settings")
         .ok_or_else(|| "settings window is not available".to_string())?;
 
     window.show().map_err(|error| error.to_string())?;
     window.set_focus().map_err(|error| error.to_string())?;
+    if let Some(panel) = panel.filter(|value| !value.trim().is_empty()) {
+        let _ = window.emit("open-settings-panel", panel);
+    }
     Ok(())
 }
 

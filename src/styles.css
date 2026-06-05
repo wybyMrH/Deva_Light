@@ -64,6 +64,14 @@ body {
   cursor: pointer;
 }
 
+.traffic-light--app {
+  cursor: grab;
+}
+
+.traffic-light--app:active {
+  cursor: grabbing;
+}
+
 .traffic-light--app .light-housing {
   min-height: 116px;
   box-shadow:

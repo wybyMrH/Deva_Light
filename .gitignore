@@ -26,6 +26,8 @@ Cargo.lock
 
 # Tauri
 src-tauri/target/
+.tauri/*.key
+!.tauri/*.key.pub
 
 # Environment
 .env

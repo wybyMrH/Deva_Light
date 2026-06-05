@@ -216,19 +216,17 @@ function createAppHandle() {
   const root = createLightElement({
     label: "Deva Light",
     status: "Standby",
-    title: "Deva Light\n点击打开设置",
+    title: "Deva Light\n拖动移动窗口 · 右键打开菜单",
     standby: true,
   });
   root.classList.add("traffic-light--app");
 
-  root.addEventListener("click", () => {
-    safeInvoke("open_settings");
-  });
-
   root.addEventListener("contextmenu", (event) => {
     event.preventDefault();
     showMenu(event.clientX, event.clientY, [
-      ["设置", () => safeInvoke("open_settings")],
+      ["设置", () => safeInvoke("open_settings", { panel: null })],
+      ["检查更新", () => safeInvoke("open_settings", { panel: "about" })],
+      ["诊断", () => showDiagnostics()],
       ["退出", () => safeInvoke("quit_app")],
     ]);
   });
@@ -509,7 +507,12 @@ function shouldStartDrag(event) {
     return false;
   }
 
-  // Drag only from the project label so lamp clicks still open/switch the drawer.
+  // Standby handle: drag anywhere on the widget (left click never opens settings).
+  if (event.target.closest(".traffic-light--app")) {
+    return true;
+  }
+
+  // Project lights: drag from label only; lamps handle click actions.
   return Boolean(event.target.closest(".light-label"));
 }
 

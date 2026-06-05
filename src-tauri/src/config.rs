@@ -34,6 +34,7 @@ pub struct AppConfig {
     pub display_mode: DisplayMode,
     pub remote_ssh_target: Option<String>,
     pub remote_codex_via_ssh: bool,
+    pub ssh_identity_file: Option<String>,
 }
 
 impl Default for AppConfig {
@@ -54,6 +55,7 @@ impl Default for AppConfig {
             display_mode: DisplayMode::Parallel,
             remote_ssh_target: None,
             remote_codex_via_ssh: true,
+            ssh_identity_file: None,
         }
     }
 }

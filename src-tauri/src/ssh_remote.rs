@@ -1,4 +1,4 @@
-use crate::logging::{log_error, log_info, log_warn};
+use crate::config::load_app_config;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -100,7 +100,7 @@ pub fn read_rollout_from_offset(path: &Path, offset: u64) -> Result<(String, u64
 }
 
 pub fn ssh_command(target: &str, remote_command: &str) -> Result<String, String> {
-    let output = run_ssh(target, remote_command)?;
+    let output = run_ssh(target, remote_command, None)?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     } else {
@@ -108,21 +108,118 @@ pub fn ssh_command(target: &str, remote_command: &str) -> Result<String, String>
         Err(if stderr.is_empty() {
             format!("ssh command failed for {target}")
         } else {
-            stderr
+            classify_ssh_error(&stderr)
         })
     }
 }
 
-fn run_ssh(target: &str, remote_command: &str) -> Result<Output, String> {
-    Command::new("ssh")
-        .args([
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "ConnectTimeout=8",
-            "-o",
-            "StrictHostKeyChecking=accept-new",
-        ])
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshConnectionTest {
+    pub ok: bool,
+    pub message: String,
+    pub codex_path: Option<String>,
+}
+
+pub fn test_ssh_connection(target: &str, identity_file: Option<&str>) -> SshConnectionTest {
+    let trimmed = target.trim();
+    if trimmed.is_empty() {
+        return SshConnectionTest {
+            ok: false,
+            message: "请先填写 SSH 目标，例如 user@192.168.1.10".to_string(),
+            codex_path: None,
+        };
+    }
+
+    match run_ssh(trimmed, "echo deva-light-ok", identity_file) {
+        Ok(output) if output.status.success() => {
+            let codex_path =
+                discover_codex_sessions_dir(trimmed).map(|path| path.to_string_lossy().to_string());
+            let message = if codex_path.is_some() {
+                "连接成功，已检测到远程 Codex 会话目录".to_string()
+            } else {
+                "连接成功，但未找到远程 ~/.codex/sessions".to_string()
+            };
+            SshConnectionTest {
+                ok: true,
+                message,
+                codex_path,
+            }
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            SshConnectionTest {
+                ok: false,
+                message: classify_ssh_error(stderr.trim()),
+                codex_path: None,
+            }
+        }
+        Err(message) => SshConnectionTest {
+            ok: false,
+            message,
+            codex_path: None,
+        },
+    }
+}
+
+fn classify_ssh_error(stderr: &str) -> String {
+    let lower = stderr.to_ascii_lowercase();
+
+    if lower.contains("permission denied") && lower.contains("publickey") {
+        "公钥认证失败：请将本机公钥添加到远程 authorized_keys（可用 ssh-copy-id）".to_string()
+    } else if lower.contains("permission denied") {
+        "认证失败：后台监控使用非交互 SSH（BatchMode），不支持密码输入。请配置密钥或 ssh-agent。"
+            .to_string()
+    } else if lower.contains("identity file") && lower.contains("not accessible") {
+        format!("私钥文件不可用：{stderr}")
+    } else if lower.contains("host key verification failed") {
+        "主机密钥未信任：请先在终端手动 ssh 连接一次".to_string()
+    } else if lower.contains("connection refused") {
+        "连接被拒绝：请确认 SSH 服务已启动且端口正确".to_string()
+    } else if lower.contains("could not resolve hostname") || lower.contains("name or service not known")
+    {
+        "无法解析主机名，请检查 SSH 目标格式".to_string()
+    } else if lower.contains("network is unreachable") || lower.contains("no route to host") {
+        "网络不可达，请检查 IP 与防火墙".to_string()
+    } else if lower.contains("operation timed out") || lower.contains("timed out") {
+        "连接超时，请检查网络与 SSH 服务".to_string()
+    } else if stderr.is_empty() {
+        "SSH 命令失败".to_string()
+    } else {
+        format!("SSH 失败：{stderr}")
+    }
+}
+
+fn run_ssh(
+    target: &str,
+    remote_command: &str,
+    identity_override: Option<&str>,
+) -> Result<Output, String> {
+    let identity_file = identity_override
+        .filter(|value| !value.trim().is_empty())
+        .map(str::trim)
+        .map(str::to_string)
+        .or_else(|| {
+            load_app_config()
+                .ssh_identity_file
+                .filter(|value| !value.trim().is_empty())
+        });
+
+    let mut command = Command::new("ssh");
+    command.args([
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=8",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+    ]);
+
+    if let Some(path) = identity_file {
+        command.arg("-i").arg(path);
+    }
+
+    command
         .arg(target)
         .arg(remote_command)
         .output()
@@ -152,5 +249,17 @@ mod tests {
             path,
             PathBuf::from("ssh://user@host/home/user/.codex/sessions")
         );
+    }
+
+    #[test]
+    fn classifies_password_auth_error() {
+        let message = classify_ssh_error("Permission denied (publickey,password).");
+        assert!(message.contains("公钥"));
+    }
+
+    #[test]
+    fn rejects_empty_ssh_target() {
+        let result = test_ssh_connection("", None);
+        assert!(!result.ok);
     }
 }

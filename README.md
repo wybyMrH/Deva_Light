@@ -83,6 +83,15 @@ curl -sL https://github.com/wybyMrH/Deva_Light/releases/latest/download/install-
 - `WINDOWS_IP`: 运行 Deva Light GUI 的 Windows 主机 IP
 - `17321`: 默认 HTTP 端口，可在设置中修改
 
+### 应用内自动更新
+
+安装带自动更新功能的版本后，后续升级无需重新下载安装包：
+
+1. 启动后自动检测 GitHub Release 更新并通知
+2. 托盘 → **检查更新**，或 **设置 → 关于 → 立即更新并重启**
+
+无需每次手动下载安装包。详见 [docs/UPDATER.md](docs/UPDATER.md)。
+
 ---
 
 ## 使用方法

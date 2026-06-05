@@ -12,3 +12,4 @@ pub mod project;
 pub mod remote;
 pub mod ssh_remote;
 pub mod types;
+pub mod updater;

@@ -1,6 +1,6 @@
 [package]
 name = "deva-light"
-version = "0.1.11"
+version = "0.1.12"
 edition = "2021"
 
 [lib]
@@ -23,6 +23,8 @@ serde_json = "1"
 toml = "0.8"
 fs2 = "0.4"
 parking_lot = "0.12"
+tauri-plugin-updater = "2.10.1"
+tokio = { version = "1", features = ["time"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
