@@ -84,6 +84,36 @@ fn hook_http_server_drives_session_lifecycle() {
 }
 
 #[test]
+fn orphan_hook_event_auto_creates_session() {
+    let config_dir = std::env::temp_dir().join(unique_name("deva-light-orphan-config"));
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::env::set_var("DEVA_LIGHT_CONFIG_DIR", &config_dir);
+
+    let project_dir = std::env::temp_dir().join(unique_name("deva-light-orphan-project"));
+    std::fs::create_dir_all(&project_dir).unwrap();
+
+    let aggregator = Arc::new(StateAggregator::new());
+    let port = start_http_server(Arc::clone(&aggregator), &AppConfig::default()).unwrap();
+
+    post_event(
+        port,
+        &format!(
+            r#"{{"event_type":"prompt-submit","session_id":"orphan-1","cwd":"{}"}}"#,
+            json_path(&project_dir)
+        ),
+    );
+
+    eventually(|| {
+        let lights = aggregator.get_lights();
+        lights.len() == 1 && lights[0].status == Status::Working
+    });
+
+    let _ = std::fs::remove_dir_all(project_dir);
+    let _ = std::fs::remove_dir_all(config_dir);
+    std::env::remove_var("DEVA_LIGHT_CONFIG_DIR");
+}
+
+#[test]
 fn hook_http_server_respects_fixed_port_config() {
     let config_dir = std::env::temp_dir().join(unique_name("deva-light-fixed-port-config"));
     std::fs::create_dir_all(&config_dir).unwrap();

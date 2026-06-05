@@ -186,7 +186,6 @@ fn install_wsl_hooks() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     };
 
-    let target_url = format!("http://127.0.0.1:{}/events", runtime.http_port);
     let mut installed = 0usize;
 
     for distro in parse_wsl_distro_list(&run_wsl_command(&["--list", "--quiet"])) {
@@ -209,7 +208,7 @@ fn install_wsl_hooks() -> Result<(), Box<dyn std::error::Error>> {
             let _ = fs::copy(&settings_path, backup_path);
         }
 
-        let merged = merge_wsl_hooks(existing, &wsl_hook_path, &target_url)?;
+        let merged = merge_wsl_hooks(existing, &wsl_hook_path, runtime.http_port)?;
         fs::write(&settings_path, serde_json::to_string_pretty(&merged)?)?;
         installed += 1;
         log_info(
@@ -389,10 +388,16 @@ pub fn hook_binary_is_current(source: &Path, destination: &Path) -> Result<bool,
     Ok(fs::read(source)? == fs::read(destination)?)
 }
 
+pub fn wsl_ai_light_url_prefix(port: u16) -> String {
+    format!(
+        "AI_LIGHT_URL=http://$(grep -m1 '^nameserver ' /etc/resolv.conf 2>/dev/null | awk '{{print $2}}' || echo 127.0.0.1):{port}/events"
+    )
+}
+
 pub fn merge_wsl_hooks(
     existing: Value,
     hook_path: &str,
-    ai_light_url: &str,
+    http_port: u16,
 ) -> Result<Value, String> {
     if !existing.is_object() {
         return Err("settings root must be a JSON object".to_string());
@@ -408,11 +413,7 @@ pub fn merge_wsl_hooks(
         .and_then(Value::as_object_mut)
         .ok_or_else(|| "settings hooks field must be a JSON object".to_string())?;
 
-    let command_prefix = format!(
-        "AI_LIGHT_URL={} {}",
-        sh_single_quote(ai_light_url),
-        sh_single_quote(hook_path)
-    );
+    let command_prefix = format!("{} {}", wsl_ai_light_url_prefix(http_port), sh_single_quote(hook_path));
 
     for (claude_event, hook_event) in HOOK_EVENTS {
         let event_hooks = hooks

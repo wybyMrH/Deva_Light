@@ -215,6 +215,8 @@ fn apply_hook_event(aggregator: &StateAggregator, event: HookEvent) {
             aggregator.remove_session(&event.session_id);
         }
         _ => {
+            ensure_session_exists(aggregator, &event);
+
             if should_ignore_late_event_after_done(aggregator, &event) {
                 log_info(
                     "http_server",
@@ -235,6 +237,33 @@ fn apply_hook_event(aggregator: &StateAggregator, event: HookEvent) {
             }
         }
     }
+}
+
+fn ensure_session_exists(aggregator: &StateAggregator, event: &HookEvent) {
+    if aggregator.session_status(&event.session_id).is_some() {
+        return;
+    }
+
+    let cwd = event
+        .cwd
+        .as_deref()
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."));
+
+    aggregator.add_session(
+        event.session_id.clone(),
+        Tool::ClaudeCode,
+        &cwd,
+        Status::Idle,
+    );
+    log_info(
+        "http_server",
+        format!(
+            "auto-created session {} from orphan event {}",
+            event.session_id, event.event_type
+        ),
+    );
 }
 
 fn should_ignore_late_event_after_done(aggregator: &StateAggregator, event: &HookEvent) -> bool {

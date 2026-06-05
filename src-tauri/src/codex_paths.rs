@@ -1,5 +1,37 @@
 use crate::config::{load_app_config, AppConfig};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+#[cfg(target_os = "windows")]
+use std::sync::Mutex;
+#[cfg(target_os = "windows")]
+use std::time::{Duration, Instant};
+
+#[cfg(target_os = "windows")]
+const WSL_DISCOVERY_TTL: Duration = Duration::from_secs(300);
+#[cfg(target_os = "windows")]
+const WSL_EXISTS_CHECK_TTL: Duration = Duration::from_secs(60);
+
+#[cfg(target_os = "windows")]
+static WSL_CODEX_DIRS_CACHE: Mutex<Option<(Instant, Vec<PathBuf>)>> = Mutex::new(None);
+
+#[cfg(target_os = "windows")]
+static WSL_PATH_EXISTS_CACHE: Mutex<WslPathExistsCache> =
+    Mutex::new(WslPathExistsCache { entries: std::collections::HashMap::new() });
+
+#[cfg(target_os = "windows")]
+#[derive(Debug)]
+struct WslPathExistsCache {
+    entries: std::collections::HashMap<PathBuf, (bool, Instant)>,
+}
+
+#[cfg(target_os = "windows")]
+impl Default for WslPathExistsCache {
+    fn default() -> Self {
+        Self {
+            entries: std::collections::HashMap::new(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodexSessionRootSummary {
@@ -33,7 +65,7 @@ pub fn codex_session_root_summary_for_auto(
     let mut missing = Vec::new();
 
     for path in candidates {
-        if path.exists() {
+        if path_is_accessible(&path) {
             push_unique(&mut active, path);
         } else {
             push_unique(&mut missing, path);
@@ -85,19 +117,51 @@ fn parse_manual_codex_sessions_dirs(config: &AppConfig) -> Vec<PathBuf> {
     paths
 }
 
+pub fn is_wsl_unc_path(path: &Path) -> bool {
+    let normalized = path.to_string_lossy();
+    normalized.starts_with(r"\\wsl.localhost\")
+        || normalized.starts_with(r"\\wsl$\")
+        || normalized.starts_with("//wsl.localhost/")
+        || normalized.starts_with("//wsl$/")
+}
+
+fn path_is_accessible(path: &Path) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        if is_wsl_unc_path(path) {
+            return cached_wsl_path_exists(path);
+        }
+    }
+
+    path.exists()
+}
+
 pub fn auto_codex_sessions_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     push_unique(&mut dirs, default_codex_sessions_dir());
 
     #[cfg(target_os = "windows")]
     {
-        for path in windows_wsl_codex_sessions_dirs() {
+        for path in cached_windows_wsl_codex_sessions_dirs() {
             push_unique(&mut dirs, path);
         }
     }
 
     dirs
 }
+
+#[cfg(target_os = "windows")]
+pub fn invalidate_wsl_discovery_cache() {
+    if let Ok(mut cache) = WSL_CODEX_DIRS_CACHE.lock() {
+        *cache = None;
+    }
+    if let Ok(mut cache) = WSL_PATH_EXISTS_CACHE.lock() {
+        cache.entries.clear();
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn invalidate_wsl_discovery_cache() {}
 
 fn default_codex_sessions_dir() -> PathBuf {
     if let Some(codex_home) = std::env::var_os("CODEX_HOME") {
@@ -117,7 +181,25 @@ fn home_dir() -> Option<PathBuf> {
 }
 
 #[cfg(target_os = "windows")]
-fn windows_wsl_codex_sessions_dirs() -> Vec<PathBuf> {
+fn cached_windows_wsl_codex_sessions_dirs() -> Vec<PathBuf> {
+    let Ok(mut cache) = WSL_CODEX_DIRS_CACHE.lock() else {
+        return discover_windows_wsl_codex_sessions_dirs();
+    };
+
+    let now = Instant::now();
+    if let Some((fetched_at, dirs)) = cache.as_ref() {
+        if now.duration_since(*fetched_at) < WSL_DISCOVERY_TTL {
+            return dirs.clone();
+        }
+    }
+
+    let dirs = discover_windows_wsl_codex_sessions_dirs();
+    *cache = Some((now, dirs.clone()));
+    dirs
+}
+
+#[cfg(target_os = "windows")]
+fn discover_windows_wsl_codex_sessions_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
 
     if let Some(path) = windows_wsl_codex_sessions_dir(None) {
@@ -131,6 +213,24 @@ fn windows_wsl_codex_sessions_dirs() -> Vec<PathBuf> {
     }
 
     dirs
+}
+
+#[cfg(target_os = "windows")]
+fn cached_wsl_path_exists(path: &Path) -> bool {
+    let Ok(mut cache) = WSL_PATH_EXISTS_CACHE.lock() else {
+        return path.exists();
+    };
+
+    let now = Instant::now();
+    if let Some((exists, checked_at)) = cache.entries.get(path) {
+        if now.duration_since(*checked_at) < WSL_EXISTS_CHECK_TTL {
+            return *exists;
+        }
+    }
+
+    let exists = path.exists();
+    cache.entries.insert(path.to_path_buf(), (exists, now));
+    exists
 }
 
 #[cfg(target_os = "windows")]
@@ -212,6 +312,15 @@ fn looks_like_utf16le(bytes: &[u8]) -> bool {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn detects_wsl_unc_paths() {
+        assert!(is_wsl_unc_path(Path::new(
+            r"\\wsl.localhost\Ubuntu\home\you\.codex\sessions"
+        )));
+        assert!(is_wsl_unc_path(Path::new("//wsl.localhost/Ubuntu/home/you/.codex/sessions")));
+        assert!(!is_wsl_unc_path(Path::new(r"C:\Users\you\.codex\sessions")));
+    }
 
     #[test]
     fn decodes_utf16le_console_output() {

@@ -1,6 +1,7 @@
 use crate::aggregator::StateAggregator;
 use crate::codex_paths::{
-    auto_codex_sessions_dirs, codex_session_root_summary_for_auto, CodexSessionRootSummary,
+    auto_codex_sessions_dirs, codex_session_root_summary_for_auto, is_wsl_unc_path,
+    CodexSessionRootSummary,
 };
 use crate::config::load_app_config;
 use crate::logging::{log_error, log_info, log_warn};
@@ -15,6 +16,7 @@ use std::thread;
 use std::time::{Duration, SystemTime};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
+const WSL_SCAN_INTERVAL: Duration = Duration::from_secs(10);
 const STALE_WORKING_AFTER: Duration = Duration::from_secs(10 * 60);
 const REMOVE_INACTIVE_AFTER: Duration = Duration::from_secs(15 * 60);
 
@@ -54,6 +56,9 @@ fn run_codex_watcher(aggregator: Arc<StateAggregator>) {
     let mut baseline = true;
     let auto_roots = auto_codex_sessions_dirs();
     let mut roots = codex_session_root_summary_for_auto(&auto_roots, &load_app_config());
+    let mut last_wsl_scan = SystemTime::now()
+        .checked_sub(WSL_SCAN_INTERVAL)
+        .unwrap_or(SystemTime::UNIX_EPOCH);
     log_root_summary("watching Codex session roots", &roots);
 
     loop {
@@ -64,28 +69,68 @@ fn run_codex_watcher(aggregator: Arc<StateAggregator>) {
             baseline = true;
         }
 
-        if let Err(error) = poll_codex_sessions(&aggregator, &mut files, baseline, &roots.active) {
+        let now = SystemTime::now();
+        let should_scan_wsl = now
+            .duration_since(last_wsl_scan)
+            .map(|elapsed| elapsed >= WSL_SCAN_INTERVAL)
+            .unwrap_or(true);
+        let (scan_roots, tracked_only_roots) =
+            partition_roots_for_poll(&roots.active, should_scan_wsl);
+
+        if let Err(error) =
+            poll_codex_sessions(&aggregator, &mut files, baseline, &scan_roots, &tracked_only_roots)
+        {
             log_watcher_error("poll codex sessions", &error);
+        }
+        if should_scan_wsl {
+            last_wsl_scan = now;
         }
         baseline = false;
         thread::sleep(POLL_INTERVAL);
     }
 }
 
+fn partition_roots_for_poll(
+    roots: &[PathBuf],
+    should_scan_wsl: bool,
+) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    let mut scan_roots = Vec::new();
+    let mut tracked_only_roots = Vec::new();
+
+    for root in roots {
+        if is_wsl_unc_path(root) && !should_scan_wsl {
+            tracked_only_roots.push(root.clone());
+        } else {
+            scan_roots.push(root.clone());
+        }
+    }
+
+    (scan_roots, tracked_only_roots)
+}
+
 fn poll_codex_sessions(
     aggregator: &StateAggregator,
     files: &mut HashMap<PathBuf, WatchedRollout>,
     baseline: bool,
-    roots: &[PathBuf],
+    scan_roots: &[PathBuf],
+    tracked_only_roots: &[PathBuf],
 ) -> io::Result<()> {
     let mut rollouts = Vec::new();
     let mut seen = HashSet::new();
     let tracked_paths = files.keys().cloned().collect::<HashSet<_>>();
 
-    for root in roots {
+    for root in scan_roots {
         for path in find_rollout_files(root, &tracked_paths)? {
             if seen.insert(path.clone()) {
                 rollouts.push(path);
+            }
+        }
+    }
+
+    for root in tracked_only_roots {
+        for path in tracked_paths.iter().filter(|path| path.starts_with(root)) {
+            if seen.insert(path.clone()) {
+                rollouts.push(path.clone());
             }
         }
     }
@@ -862,7 +907,7 @@ mod tests {
         let aggregator = StateAggregator::new();
         let mut files = HashMap::new();
         let roots = vec![first_root.clone(), second_root.clone()];
-        poll_codex_sessions(&aggregator, &mut files, true, &roots).unwrap();
+        poll_codex_sessions(&aggregator, &mut files, true, &roots, &[]).unwrap();
 
         let lights = aggregator.get_lights();
         assert_eq!(lights.len(), 2);

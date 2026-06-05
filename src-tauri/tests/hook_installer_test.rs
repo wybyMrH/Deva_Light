@@ -1,6 +1,6 @@
 use deva_light::hook_installer::{
     hook_binary_is_current, merge_hooks, merge_wsl_hooks, remove_ai_light_hooks,
-    windows_path_to_wsl_path,
+    windows_path_to_wsl_path, wsl_ai_light_url_prefix,
 };
 use serde_json::json;
 use std::path::Path;
@@ -114,15 +114,26 @@ fn merge_wsl_hooks_embeds_ai_light_url_and_wsl_command() {
     let merged = merge_wsl_hooks(
         json!({}),
         "/mnt/c/Users/Admin/.deva_light/bin/deva-light-hook.exe",
-        "http://127.0.0.1:55548/events",
+        55_548,
     )
     .unwrap();
     let hook = &merged["hooks"]["Notification"][0]["hooks"][0];
 
     assert_eq!(
         hook["command"],
-        "AI_LIGHT_URL='http://127.0.0.1:55548/events' '/mnt/c/Users/Admin/.deva_light/bin/deva-light-hook.exe' notification"
+        format!(
+            "{} '/mnt/c/Users/Admin/.deva_light/bin/deva-light-hook.exe' notification",
+            wsl_ai_light_url_prefix(55_548)
+        )
     );
+}
+
+#[test]
+fn wsl_ai_light_url_prefix_resolves_windows_host_at_runtime() {
+    let prefix = wsl_ai_light_url_prefix(17_321);
+    assert!(prefix.contains("nameserver"));
+    assert!(prefix.contains("17321/events"));
+    assert!(prefix.contains("127.0.0.1"));
 }
 
 #[test]
