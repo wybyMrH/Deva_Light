@@ -7,5 +7,8 @@ pub mod config;
 pub mod hook_installer;
 pub mod http_server;
 pub mod logging;
+pub mod monitoring;
 pub mod project;
+pub mod remote;
+pub mod ssh_remote;
 pub mod types;

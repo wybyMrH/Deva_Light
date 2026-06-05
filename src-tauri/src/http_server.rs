@@ -1,13 +1,18 @@
 use crate::aggregator::StateAggregator;
-use crate::config::{load_runtime_config, save_runtime_config, AppConfig, RuntimeConfig};
+use crate::config::{
+    ensure_http_token, load_runtime_config, save_app_config, save_runtime_config, AppConfig,
+    RuntimeConfig,
+};
 use crate::logging::{log_error, log_info, log_warn};
 use crate::types::{Status, Tool};
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::thread;
+use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -19,6 +24,8 @@ pub struct HookEvent {
     pub cwd: Option<String>,
     #[serde(default, alias = "tool", alias = "toolName", alias = "tool_name")]
     pub tool_call: Option<String>,
+    #[serde(default, alias = "prompt", alias = "user_prompt", alias = "message")]
+    pub task_hint: Option<String>,
 }
 
 impl HookEvent {
@@ -34,6 +41,67 @@ impl HookEvent {
             "session-end" => None,
             _ => None,
         }
+    }
+}
+
+pub struct HttpServerController {
+    shutdown: Arc<AtomicBool>,
+    worker: Mutex<Option<JoinHandle<()>>>,
+    port: Mutex<Option<u16>>,
+}
+
+impl HttpServerController {
+    pub fn new() -> Self {
+        Self {
+            shutdown: Arc::new(AtomicBool::new(false)),
+            worker: Mutex::new(None),
+            port: Mutex::new(None),
+        }
+    }
+
+    pub fn current_port(&self) -> Option<u16> {
+        *self.port.lock()
+    }
+
+    pub fn start(
+        &self,
+        aggregator: Arc<StateAggregator>,
+        app_config: &AppConfig,
+    ) -> Result<u16, String> {
+        self.stop();
+
+        let shutdown = Arc::clone(&self.shutdown);
+        let (port, worker) = spawn_http_server(Arc::clone(&aggregator), app_config, shutdown)
+            .map_err(|error| error.to_string())?;
+
+        *self.worker.lock() = Some(worker);
+        *self.port.lock() = Some(port);
+        Ok(port)
+    }
+
+    pub fn restart(
+        &self,
+        aggregator: Arc<StateAggregator>,
+        app_config: &AppConfig,
+    ) -> Result<u16, String> {
+        self.start(aggregator, app_config)
+    }
+
+    pub fn stop(&self) {
+        self.shutdown.store(true, Ordering::SeqCst);
+
+        if let Some(worker) = self.worker.lock().take() {
+            let _ = worker.join();
+        }
+
+        *self.port.lock() = None;
+        self.shutdown.store(false, Ordering::SeqCst);
+    }
+}
+
+impl Default for HttpServerController {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -67,15 +135,36 @@ pub fn start_http_server(
     aggregator: Arc<StateAggregator>,
     app_config: &AppConfig,
 ) -> Result<u16, Box<dyn std::error::Error + Send + Sync>> {
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let (port, worker) = spawn_http_server(aggregator, app_config, shutdown)?;
+    drop(worker);
+    Ok(port)
+}
+
+fn spawn_http_server(
+    aggregator: Arc<StateAggregator>,
+    app_config: &AppConfig,
+    shutdown: Arc<AtomicBool>,
+) -> Result<(u16, JoinHandle<()>), Box<dyn std::error::Error + Send + Sync>> {
+    let mut persisted_config = app_config.clone();
+    let auth_token = ensure_http_token(&mut persisted_config);
+    if persisted_config.http_token != app_config.http_token {
+        save_app_config(&persisted_config)?;
+    }
+
     let bind_address = format!(
         "{}:{}",
         app_config.http_bind,
         app_config.http_port.unwrap_or(0)
     );
     let listener = TcpListener::bind(bind_address)?;
+    listener.set_nonblocking(true)?;
     let port = listener.local_addr()?.port();
 
-    save_runtime_config(&RuntimeConfig { http_port: port })?;
+    save_runtime_config(&RuntimeConfig {
+        http_port: port,
+        http_token: auth_token.clone(),
+    })?;
     log_info(
         "http_server",
         format!(
@@ -85,18 +174,26 @@ pub fn start_http_server(
         ),
     );
 
-    thread::Builder::new()
+    let worker = thread::Builder::new()
         .name("ai-light-http-server".to_string())
-        .spawn(move || {
-            for stream in listener.incoming() {
-                let Ok(stream) = stream else {
-                    log_warn("http_server", "failed to accept incoming connection");
-                    continue;
-                };
+        .spawn(move || run_http_server(listener, aggregator, auth_token, shutdown))?;
 
+    Ok((port, worker))
+}
+
+fn run_http_server(
+    listener: TcpListener,
+    aggregator: Arc<StateAggregator>,
+    auth_token: Option<String>,
+    shutdown: Arc<AtomicBool>,
+) {
+    while !shutdown.load(Ordering::Relaxed) {
+        match listener.accept() {
+            Ok((stream, _)) => {
                 let aggregator = Arc::clone(&aggregator);
+                let auth_token = auth_token.clone();
                 thread::spawn(move || {
-                    if let Err(error) = handle_connection(stream, aggregator) {
+                    if let Err(error) = handle_connection(stream, aggregator, auth_token) {
                         log_error(
                             "http_server",
                             format!("connection handling failed: {error}"),
@@ -104,18 +201,39 @@ pub fn start_http_server(
                     }
                 });
             }
-        })?;
+            Err(error)
+                if error.kind() == io::ErrorKind::WouldBlock
+                    || error.kind() == io::ErrorKind::TimedOut =>
+            {
+                thread::sleep(Duration::from_millis(50));
+            }
+            Err(error) => {
+                if shutdown.load(Ordering::Relaxed) {
+                    break;
+                }
+                log_warn(
+                    "http_server",
+                    format!("failed to accept incoming connection: {error}"),
+                );
+                thread::sleep(Duration::from_millis(100));
+            }
+        }
+    }
 
-    Ok(port)
+    log_info("http_server", "stopped");
 }
 
 fn default_session_id() -> String {
     "unknown".to_string()
 }
 
-fn handle_connection(mut stream: TcpStream, aggregator: Arc<StateAggregator>) -> io::Result<()> {
+fn handle_connection(
+    mut stream: TcpStream,
+    aggregator: Arc<StateAggregator>,
+    auth_token: Option<String>,
+) -> io::Result<()> {
     let request = read_http_request(&mut stream)?;
-    let Some((request_line, body)) = request else {
+    let Some((request_line, headers, body)) = request else {
         log_warn("http_server", "received malformed HTTP request");
         return write_response(&mut stream, 400, "Bad Request", "missing request");
     };
@@ -131,16 +249,23 @@ fn handle_connection(mut stream: TcpStream, aggregator: Arc<StateAggregator>) ->
                 .unwrap_or_else(|_| "[]".to_string());
             write_json_response(&mut stream, 200, "OK", &body)
         }
-        ("POST", "/events") => match parse_hook_event(&body) {
-            Ok(event) => {
-                apply_hook_event(&aggregator, event);
-                write_response(&mut stream, 200, "OK", "ok")
+        ("POST", "/events") => {
+            if !authorize_request(&headers, auth_token.as_deref()) {
+                log_warn("http_server", "rejected unauthorized hook event");
+                return write_response(&mut stream, 401, "Unauthorized", "invalid token");
             }
-            Err(error) => {
-                log_warn("http_server", format!("invalid hook payload: {error}"));
-                write_response(&mut stream, 400, "Bad Request", "invalid json")
+
+            match parse_hook_event(&body) {
+                Ok(event) => {
+                    apply_hook_event(&aggregator, event);
+                    write_response(&mut stream, 200, "OK", "ok")
+                }
+                Err(error) => {
+                    log_warn("http_server", format!("invalid hook payload: {error}"));
+                    write_response(&mut stream, 400, "Bad Request", "invalid json")
+                }
             }
-        },
+        }
         _ => {
             log_warn("http_server", format!("unhandled request {method} {path}"));
             write_response(&mut stream, 404, "Not Found", "not found")
@@ -148,7 +273,39 @@ fn handle_connection(mut stream: TcpStream, aggregator: Arc<StateAggregator>) ->
     }
 }
 
-fn read_http_request(stream: &mut TcpStream) -> io::Result<Option<(String, String)>> {
+fn authorize_request(headers: &str, expected_token: Option<&str>) -> bool {
+    let Some(expected_token) = expected_token else {
+        return true;
+    };
+
+    extract_header_value(headers, "x-deva-light-token")
+        .or_else(|| extract_bearer_token(headers))
+        .is_some_and(|provided| provided == expected_token)
+}
+
+fn extract_header_value(headers: &str, header_name: &str) -> Option<String> {
+    let target = header_name.to_ascii_lowercase();
+
+    headers.lines().skip(1).find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        if name.trim().eq_ignore_ascii_case(&target) {
+            Some(value.trim().to_string())
+        } else {
+            None
+        }
+    })
+}
+
+fn extract_bearer_token(headers: &str) -> Option<String> {
+    let authorization = extract_header_value(headers, "authorization")?;
+    authorization
+        .strip_prefix("Bearer ")
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .map(ToString::to_string)
+}
+
+fn read_http_request(stream: &mut TcpStream) -> io::Result<Option<(String, String, String)>> {
     let mut buffer = Vec::new();
     let mut chunk = [0; 1024];
 
@@ -177,7 +334,7 @@ fn read_http_request(stream: &mut TcpStream) -> io::Result<Option<(String, Strin
             let body_end = (body_start + content_length).min(buffer.len());
             let body = String::from_utf8_lossy(&buffer[body_start..body_end]).to_string();
 
-            return Ok(Some((request_line, body)));
+            return Ok(Some((request_line, headers, body)));
         }
 
         if buffer.len() > 64 * 1024 {
@@ -230,6 +387,10 @@ fn apply_hook_event(aggregator: &StateAggregator, event: HookEvent) {
 
             if let Some(status) = HookEvent::event_type_to_status(&event.event_type) {
                 aggregator.update_session_status(&event.session_id, status);
+            }
+
+            if let Some(task_hint) = event.task_hint.as_deref().filter(|value| !value.is_empty()) {
+                aggregator.set_task_name(&event.session_id, task_hint.to_string());
             }
 
             if let Some(tool_call) = event.tool_call {
@@ -328,9 +489,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_content_length_case_insensitively() {
-        let headers = "POST /events HTTP/1.1\r\ncontent-length: 42\r\n";
+    fn rejects_missing_token_when_auth_enabled() {
+        assert!(!authorize_request("", Some("secret")));
+    }
 
-        assert_eq!(parse_content_length(headers), 42);
+    #[test]
+    fn accepts_matching_header_token() {
+        let headers = "POST /events HTTP/1.1\r\nX-Deva-Light-Token: secret\r\n";
+        assert!(authorize_request(headers, Some("secret")));
+    }
+
+    #[test]
+    fn accepts_bearer_token() {
+        let headers = "POST /events HTTP/1.1\r\nAuthorization: Bearer secret\r\n";
+        assert!(authorize_request(headers, Some("secret")));
     }
 }

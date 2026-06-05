@@ -7,7 +7,42 @@ on:
   workflow_dispatch:
 
 jobs:
+  linux-hook:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Build Linux hook binary
+        run: cargo build -p deva-light-hook --release
+
+      - name: Package hook release files
+        run: |
+          mkdir -p dist
+          cp target/release/deva-light-hook dist/
+          cp scripts/install-ubuntu-hook.sh dist/
+          chmod +x dist/deva-light-hook dist/install-ubuntu-hook.sh
+
+      - name: Upload Linux hook artifacts
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            dist/deva-light-hook
+            dist/install-ubuntu-hook.sh
+
   release:
+    needs: linux-hook
     permissions:
       contents: write
     strategy:
@@ -23,12 +58,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Install dependencies (ubuntu only)
-        if: matrix.platform == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
       - name: Setup Node
         uses: actions/setup-node@v4

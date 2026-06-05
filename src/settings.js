@@ -22,6 +22,17 @@ const openAppLogButton = document.getElementById("open-app-log");
 
 // Window settings
 const alwaysOnTopCheckbox = document.getElementById("always-on-top");
+const displayModeSelect = document.getElementById("display-mode");
+const remoteSshTargetInput = document.getElementById("remote-ssh-target");
+const remoteCodexViaSshCheckbox = document.getElementById("remote-codex-via-ssh");
+const sshCodexPathEl = document.getElementById("ssh-codex-path");
+const httpTokenEl = document.getElementById("http-token");
+const localAddressesEl = document.getElementById("local-addresses");
+const remoteInstallCommand = document.getElementById("remote-install-command");
+const refreshRemoteButton = document.getElementById("refresh-remote");
+const copyInstallCommandButton = document.getElementById("copy-install-command");
+const copySshCommandButton = document.getElementById("copy-ssh-command");
+const regenerateTokenButton = document.getElementById("regenerate-token");
 
 // Notification settings
 const notificationsEnabledCheckbox = document.getElementById("notifications-enabled");
@@ -37,6 +48,10 @@ prepareUninstallButton.addEventListener("click", prepareUninstall);
 refreshDiagnosticsButton.addEventListener("click", refreshDiagnostics);
 copyDiagnosticsButton.addEventListener("click", copyDiagnostics);
 openAppLogButton.addEventListener("click", openAppLog);
+refreshRemoteButton.addEventListener("click", refreshRemoteSetup);
+copyInstallCommandButton.addEventListener("click", copyInstallCommand);
+copySshCommandButton.addEventListener("click", copySshCommand);
+regenerateTokenButton.addEventListener("click", regenerateToken);
 
 loadSettings();
 
@@ -53,6 +68,10 @@ async function loadSettings() {
 
     // Window settings
     alwaysOnTopCheckbox.checked = config.alwaysOnTop ?? true;
+    displayModeSelect.value = config.displayMode || "parallel";
+    remoteSshTargetInput.value = config.remoteSshTarget || "";
+    remoteCodexViaSshCheckbox.checked = config.remoteCodexViaSsh ?? true;
+    httpTokenEl.textContent = config.httpToken || "未启用";
 
     // Notification settings
     notificationsEnabledCheckbox.checked = config.notificationsEnabled ?? true;
@@ -61,6 +80,7 @@ async function loadSettings() {
     codexManualPathsInput.value = (config.codexManualPaths ?? []).join("\n");
 
     await refreshDiagnostics();
+    await refreshRemoteSetup();
     setStatus("");
   } catch (error) {
     setStatus(String(error), true);
@@ -76,7 +96,7 @@ async function saveSettings() {
   setBusy(true);
 
   try {
-    await invoke("save_app_config_command", {
+    const result = await invoke("save_app_config_command", {
       update: {
         httpBind: bindSelect.value,
         httpPort,
@@ -85,14 +105,26 @@ async function saveSettings() {
         notifyOnWaiting: notifyWaitingCheckbox.checked,
         notifyOnDone: notifyDoneCheckbox.checked,
         codexManualPaths: parseCodexManualPaths(),
+        displayMode: displayModeSelect.value,
+        remoteSshTarget: remoteSshTargetInput.value.trim(),
+        remoteCodexViaSsh: remoteCodexViaSshCheckbox.checked,
       },
     });
 
     // Apply always_on_top immediately
     await invoke("set_always_on_top", { enabled: alwaysOnTopCheckbox.checked });
     await refreshDiagnostics();
+    await refreshRemoteSetup();
 
-    setStatus("已保存。Codex 监控器将在约 1 秒后重载路径变更。");
+    if (result?.runtimePort) {
+      runtimePort.textContent = String(result.runtimePort);
+    }
+
+    setStatus(
+      result?.httpReloaded
+        ? "已保存，HTTP 服务已热重载。"
+        : "已保存。Codex 监控器将在约 1 秒后重载路径变更。",
+    );
   } catch (error) {
     setStatus(String(error), true);
   } finally {
@@ -157,6 +189,84 @@ async function prepareUninstall() {
       keepConfig
         ? "部分清理完成。现在可以卸载应用。配置文件已保留以便重新安装。"
         : "完整清理完成。现在可以卸载应用。"
+    );
+  } catch (error) {
+    setStatus(String(error), true);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function refreshRemoteSetup() {
+  try {
+    const remote = await invoke("get_remote_setup_info");
+    httpTokenEl.textContent = remote?.httpToken || "未启用";
+    localAddressesEl.textContent =
+      remote?.localAddresses?.join(", ") || remote?.primaryHost || "未检测到";
+    remoteInstallCommand.value = remote?.curlInstallCommand || remote?.installCommand || "";
+    sshCodexPathEl.textContent =
+      remote?.sshCodexPath || "未检测到（请确认 SSH 免密登录和 Codex 安装）";
+    copySshCommandButton.disabled = !remote?.sshInstallCommand;
+    window.__lastRemoteSetup = remote;
+  } catch (error) {
+    localAddressesEl.textContent = String(error);
+    remoteInstallCommand.value = "";
+  }
+}
+
+async function copyInstallCommand() {
+  const text = remoteInstallCommand.value.trim();
+  if (!text) {
+    setStatus("安装命令不可用。请先启用局域网转发并刷新远程信息。", true);
+    return;
+  }
+
+  if (navigator.clipboard) {
+    await navigator.clipboard.writeText(text);
+    setStatus("Ubuntu 安装命令已复制。");
+  }
+}
+
+async function copySshCommand() {
+  const text = window.__lastRemoteSetup?.sshInstallCommand;
+  if (!text) {
+    setStatus("请填写 SSH 目标并刷新远程信息。", true);
+    return;
+  }
+
+  if (navigator.clipboard) {
+    await navigator.clipboard.writeText(text);
+    setStatus("SSH 安装命令已复制。");
+  }
+}
+
+async function regenerateToken() {
+  const confirmed = confirm("重新生成 Token 后，远程 hook 需要重新安装。确定继续？");
+  if (!confirmed) return;
+
+  setBusy(true);
+  try {
+    const httpPort = parsePort();
+    if (httpPort === false) return;
+
+    const result = await invoke("save_app_config_command", {
+      update: {
+        httpBind: bindSelect.value,
+        httpPort,
+        displayMode: displayModeSelect.value,
+        remoteSshTarget: remoteSshTargetInput.value.trim(),
+        remoteCodexViaSsh: remoteCodexViaSshCheckbox.checked,
+        regenerateHttpToken: true,
+      },
+    });
+    await refreshRemoteSetup();
+    if (result?.runtimePort) {
+      runtimePort.textContent = String(result.runtimePort);
+    }
+    setStatus(
+      result?.httpReloaded
+        ? "Token 已重新生成，HTTP 服务已热重载。请重新安装远程 hook。"
+        : "Token 已重新生成。请重新安装远程 hook。",
     );
   } catch (error) {
     setStatus(String(error), true);
@@ -310,6 +420,13 @@ function setBusy(isBusy) {
   notificationsEnabledCheckbox.disabled = isBusy;
   notifyWaitingCheckbox.disabled = isBusy;
   notifyDoneCheckbox.disabled = isBusy;
+  displayModeSelect.disabled = isBusy;
+  remoteSshTargetInput.disabled = isBusy;
+  remoteCodexViaSshCheckbox.disabled = isBusy;
+  refreshRemoteButton.disabled = isBusy;
+  copyInstallCommandButton.disabled = isBusy;
+  copySshCommandButton.disabled = isBusy;
+  regenerateTokenButton.disabled = isBusy;
 }
 
 function setStatus(message, isError = false) {

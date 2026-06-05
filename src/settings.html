@@ -20,6 +20,15 @@
           <input id="always-on-top" type="checkbox" checked />
           <span class="hint">保持窗口在所有其他窗口之上</span>
         </section>
+
+        <section class="field">
+          <label for="display-mode">显示模式</label>
+          <select id="display-mode">
+            <option value="parallel">并行灯组</option>
+            <option value="compact">收纳抽屉</option>
+          </select>
+          <span class="hint">并行：每个项目一组灯；收纳：多项目时合并到抽屉切换</span>
+        </section>
       </section>
 
       <section class="group">
@@ -62,7 +71,50 @@
             <dt>当前端口</dt>
             <dd id="runtime-port">未知</dd>
           </div>
+          <div>
+            <dt>鉴权 Token</dt>
+            <dd id="http-token">未启用</dd>
+          </div>
+          <div>
+            <dt>本机地址</dt>
+            <dd id="local-addresses">检测中...</dd>
+          </div>
         </dl>
+
+        <section class="field">
+          <label for="remote-codex-via-ssh">SSH 远程 Codex 监控</label>
+          <input id="remote-codex-via-ssh" type="checkbox" checked />
+          <span class="hint">通过 SSH 读取远程 ~/.codex/sessions（需本机可 ssh 免密登录）</span>
+        </section>
+
+        <dl>
+          <div>
+            <dt>远程 Codex 路径</dt>
+            <dd id="ssh-codex-path">未配置</dd>
+          </div>
+        </dl>
+
+        <section class="field field-stack">
+          <label for="remote-ssh-target">SSH 目标（可选）</label>
+          <input
+            id="remote-ssh-target"
+            type="text"
+            placeholder="user@ubuntu-host"
+          />
+          <span class="hint">填写后可在下方生成一键 SSH 安装命令</span>
+        </section>
+
+        <section class="integration diagnostics-actions">
+          <button id="refresh-remote" type="button">刷新远程信息</button>
+          <button id="copy-install-command" type="button">复制安装命令</button>
+          <button id="copy-ssh-command" type="button">复制 SSH 命令</button>
+          <button id="regenerate-token" type="button">重新生成 Token</button>
+        </section>
+
+        <section class="field field-stack">
+          <label for="remote-install-command">Ubuntu 安装命令</label>
+          <textarea id="remote-install-command" rows="4" readonly></textarea>
+        </section>
       </section>
 
       <section class="group">

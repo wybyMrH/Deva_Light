@@ -62,7 +62,10 @@ fn load_app_config_accepts_utf8_bom() {
 
 #[test]
 fn runtime_config_serializes_http_port() {
-    let runtime = RuntimeConfig { http_port: 12345 };
+    let runtime = RuntimeConfig {
+        http_port: 12345,
+        http_token: None,
+    };
 
     let json = serde_json::to_string(&runtime).unwrap();
     let parsed: RuntimeConfig = serde_json::from_str(&json).unwrap();

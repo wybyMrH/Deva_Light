@@ -3,10 +3,11 @@
 use deva_light::aggregator::StateAggregator;
 use deva_light::app_lock::AppLock;
 use deva_light::config::load_app_config;
-use deva_light::http_server::{existing_instance_is_healthy, start_http_server};
+use deva_light::http_server::{existing_instance_is_healthy, HttpServerController};
 use deva_light::logging::{log_error, log_info, log_warn};
 use deva_light::types::Status;
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
@@ -33,11 +34,12 @@ fn main() {
 
     let app_config = load_app_config();
     let aggregator = Arc::new(StateAggregator::new());
-    let server_aggregator = Arc::clone(&aggregator);
+    let http_server = Arc::new(HttpServerController::new());
 
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .manage(Arc::clone(&aggregator))
+        .manage(Arc::clone(&http_server))
         .manage(app_lock)
         .invoke_handler(tauri::generate_handler![
             ipc::confirm_light,
@@ -55,6 +57,10 @@ fn main() {
             ipc::copy_path,
             ipc::pause_monitoring,
             ipc::resume_monitoring,
+            ipc::get_monitoring_paused,
+            ipc::get_ui_config,
+            ipc::get_remote_setup_info,
+            ipc::persist_window_position,
             ipc::open_settings,
             ipc::resize_main_window,
             ipc::check_hooks,
@@ -81,6 +87,16 @@ fn main() {
                 .get_webview_window("main")
                 .expect("main window should exist");
 
+            #[cfg(target_os = "macos")]
+            {
+                use tauri::window::Color;
+                let _ = window.set_background_color(Some(Color(0, 0, 0, 0)));
+            }
+
+            let _ = window.set_position(tauri::Position::Physical(
+                tauri::PhysicalPosition::new(app_config.window_x, app_config.window_y),
+            ));
+
             // Apply always_on_top setting
             let _ = window.set_always_on_top(app_config.always_on_top);
             log_info(
@@ -101,36 +117,54 @@ fn main() {
             let emit_aggregator = Arc::clone(&aggregator);
             let emit_window = window.clone();
             let app_handle = app.handle().clone();
-            let config_for_notify = app_config.clone();
+            let last_light_statuses = Mutex::new(HashMap::<String, Status>::new());
 
             aggregator.set_on_change(move || {
                 let lights = emit_aggregator.get_lights();
                 let _ = emit_window.emit("state-changed", &lights);
 
-                // Send notifications for status changes
-                if config_for_notify.notifications_enabled {
-                    for light in &lights {
-                        let should_notify = match light.status {
-                            Status::Waiting => config_for_notify.notify_on_waiting,
-                            Status::Done => config_for_notify.notify_on_done,
-                            _ => false,
-                        };
-
-                        if should_notify {
-                            let title = format!("Deva Light - {}", light.project_label);
-                            let body = match light.status {
-                                Status::Waiting => "AI 需要您的关注".to_string(),
-                                Status::Done => "任务已完成".to_string(),
-                                _ => String::new(),
-                            };
-                            let _ = app_handle.emit("notify-status", (title, body));
-                        }
-                    }
+                let config = load_app_config();
+                if !config.notifications_enabled {
+                    return;
                 }
+
+                let mut last_statuses = last_light_statuses
+                    .lock()
+                    .expect("notification status lock poisoned");
+
+                for light in &lights {
+                    let previous = last_statuses.insert(light.project_id.clone(), light.status);
+                    if previous == Some(light.status) {
+                        continue;
+                    }
+
+                    let should_notify = match light.status {
+                        Status::Waiting => config.notify_on_waiting,
+                        Status::Done => config.notify_on_done,
+                        _ => false,
+                    };
+
+                    if !should_notify {
+                        continue;
+                    }
+
+                    let title = format!("Deva Light - {}", light.project_label);
+                    let body = match light.status {
+                        Status::Waiting => "AI 需要您的关注".to_string(),
+                        Status::Done => "任务已完成".to_string(),
+                        _ => String::new(),
+                    };
+                    let _ = app_handle.emit("notify-status", (title, body));
+                }
+
+                last_statuses.retain(|project_id, _| {
+                    lights.iter().any(|light| &light.project_id == project_id)
+                });
             });
 
-            start_http_server(Arc::clone(&server_aggregator), &app_config)
-                .map_err(|error| std::io::Error::other(error.to_string()))?;
+            http_server
+                .start(Arc::clone(&aggregator), &app_config)
+                .map_err(|error| std::io::Error::other(error))?;
             deva_light::codex_watcher::start_codex_watcher(Arc::clone(&aggregator))?;
             deva_light::claude_watcher::start_claude_watcher(Arc::clone(&aggregator));
             log_info("app", "watchers started");

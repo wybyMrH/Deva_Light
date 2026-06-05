@@ -16,6 +16,7 @@ struct HookEvent {
     session_id: String,
     cwd: Option<String>,
     tool_call: Option<String>,
+    task_hint: Option<String>,
 }
 
 fn main() {
@@ -47,6 +48,7 @@ fn main() {
             .unwrap_or_else(|| "unknown".to_string()),
         cwd: extract_string(&payload, &["cwd"]),
         tool_call: extract_string(&payload, &["tool_name", "tool", "toolName"]),
+        task_hint: extract_string(&payload, &["prompt", "user_prompt", "message"]),
     };
 
     match post_event(&target_url, &event) {
@@ -137,12 +139,16 @@ fn normalize_event_type(event_type: &str) -> String {
 
 fn post_event(url: &str, event: &HookEvent) -> Result<u16, String> {
     let client = reqwest::blocking::Client::new();
+    let mut request = client.post(url).json(event);
 
-    let response = client
-        .post(url)
-        .json(event)
-        .send()
-        .map_err(|error| error.to_string())?;
+    if let Ok(token) = env::var("AI_LIGHT_TOKEN") {
+        let token = token.trim();
+        if !token.is_empty() {
+            request = request.header("X-Deva-Light-Token", token);
+        }
+    }
+
+    let response = request.send().map_err(|error| error.to_string())?;
 
     Ok(response.status().as_u16())
 }

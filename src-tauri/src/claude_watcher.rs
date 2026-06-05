@@ -1,4 +1,5 @@
 use crate::aggregator::StateAggregator;
+use crate::monitoring::is_monitoring_paused;
 use crate::logging::log_info;
 use crate::types::{Status, Tool};
 use serde::Deserialize;
@@ -10,7 +11,6 @@ use std::thread;
 use std::time::Duration;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(3);
-const STALE_WORKING_AFTER: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Debug, Deserialize)]
 struct ClaudeSessionFile {
@@ -37,6 +37,7 @@ pub fn start_claude_watcher(aggregator: Arc<StateAggregator>) {
 
 fn run_claude_watcher(aggregator: Arc<StateAggregator>) {
     let mut tracked: HashMap<String, TrackedSession> = HashMap::new();
+    let mut previous_session_files: HashMap<String, String> = HashMap::new();
 
     let sessions_dir = claude_sessions_dir();
     log_info(
@@ -45,22 +46,42 @@ fn run_claude_watcher(aggregator: Arc<StateAggregator>) {
     );
 
     loop {
+        if is_monitoring_paused() {
+            thread::sleep(POLL_INTERVAL);
+            continue;
+        }
+
         if let Ok(entries) = scan_session_files(&sessions_dir) {
             let mut seen_file_names: HashMap<String, bool> = HashMap::new();
+            let mut current_session_files: HashMap<String, String> = HashMap::new();
 
             for (file_name, session) in &entries {
                 seen_file_names.insert(file_name.clone(), true);
+                current_session_files.insert(session.session_id.clone(), file_name.clone());
 
-                // Skip sessions already tracked by hooks
-                if aggregator.session_status(&session.session_id).is_some() {
-                    tracked.remove(&session.session_id);
+                if let Some(current_status) = aggregator.session_status(&session.session_id) {
+                    if current_status == Status::Working && !is_process_alive(session.pid) {
+                        log_info(
+                            "claude_watcher",
+                            format!(
+                                "Claude session {} (pid={}) process ended; marking Done",
+                                session.session_id, session.pid
+                            ),
+                        );
+                        aggregator.update_session_status(&session.session_id, Status::Done);
+                    }
+
+                    if let Some(existing) = tracked.get_mut(&session.session_id) {
+                        existing.pid = session.pid;
+                        existing.file_name = file_name.clone();
+                    }
                     continue;
                 }
 
                 if tracked.contains_key(&session.session_id) {
-                    // Already tracked by us, update pid if needed
                     if let Some(existing) = tracked.get_mut(&session.session_id) {
                         existing.pid = session.pid;
+                        existing.file_name = file_name.clone();
                     }
                     continue;
                 }
@@ -93,10 +114,26 @@ fn run_claude_watcher(aggregator: Arc<StateAggregator>) {
                 }
             }
 
+            for (session_id, _) in &previous_session_files {
+                if current_session_files.contains_key(session_id) {
+                    continue;
+                }
+
+                if aggregator.session_status(session_id) == Some(Status::Working) {
+                    log_info(
+                        "claude_watcher",
+                        format!("Claude session {session_id} file removed; marking Done"),
+                    );
+                    aggregator.update_session_status(session_id, Status::Done);
+                }
+            }
+
+            previous_session_files = current_session_files;
+
             // Handle dead sessions: file removed or process dead
             let dead_ids: Vec<String> = tracked
                 .iter()
-                .filter(|(id, session)| {
+                .filter(|(_id, session)| {
                     // Session file removed → ended cleanly
                     if !seen_file_names.contains_key(&session.file_name) {
                         return true;

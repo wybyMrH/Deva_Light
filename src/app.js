@@ -1,10 +1,15 @@
 import {
   createDrawer,
   updateDrawer,
+  updateProjectDrawer,
   showDrawer,
+  showProjectDrawer,
   hideDrawer,
   getBadgeText,
   shouldShowBadge,
+  isDrawerOpen,
+  getCurrentDrawerProjectId,
+  getDrawerMode,
 } from "./drawer.js";
 
 const tauriEvent = window.__TAURI__?.event;
@@ -14,6 +19,7 @@ const currentWindow =
   window.__TAURI__?.webviewWindow?.getCurrentWebviewWindow?.();
 
 let lights = [];
+let displayMode = "parallel";
 const lightElements = new Map();
 let lastWindowSize = { width: 0, height: 0 };
 let resizeFrame = 0;
@@ -36,13 +42,44 @@ tauriEvent?.listen("state-changed", (event) => {
   render();
 });
 
+tauriEvent?.listen("config-changed", (event) => {
+  displayMode = event.payload?.displayMode || "parallel";
+  render();
+});
+
+window.addEventListener("drawer-project-selected", (event) => {
+  const projectId = event.detail?.projectId;
+  const light = lights.find((entry) => entry.project_id === projectId);
+  if (!light) return;
+
+  if (light.sessions.length > 1) {
+    showDrawer(projectId, drawer, light.project_label || light.project_id);
+    updateDrawer(drawer, light.sessions, light.project_label || light.project_id);
+    scheduleWindowResize();
+    return;
+  }
+
+  hideDrawer();
+});
+
 window.addEventListener("drawer-visibility-changed", () => {
   scheduleWindowResize();
 });
 
 document.addEventListener("click", (event) => {
-  if (!menu.contains(event.target) && !drawer.contains(event.target)) {
+  if (menu.contains(event.target)) {
+    return;
+  }
+
+  if (drawer.contains(event.target)) {
     hideMenu();
+    return;
+  }
+
+  hideMenu();
+
+  if (isDrawerOpen() && !event.target.closest(".traffic-light")) {
+    hideDrawer();
   }
 });
 
@@ -93,16 +130,41 @@ document.addEventListener("pointermove", async (event) => {
   } catch {}
 });
 
-document.addEventListener("pointerup", () => {
+document.addEventListener("pointerup", async () => {
+  if (isDragging && currentWindow) {
+    try {
+      const pos = await currentWindow.outerPosition();
+      if (pos) {
+        await safeInvoke("persist_window_position", { x: pos.x, y: pos.y });
+      }
+    } catch {}
+  }
+
   isDragging = false;
   dragStart = null;
 });
 
+function statusPriority(status) {
+  return ({ Waiting: 3, Working: 2, Done: 1, Idle: 0 }[status] ?? 0);
+}
+
+function lightsForDisplay() {
+  if (displayMode === "compact" && lights.length > 1) {
+    const primary = [...lights].sort(
+      (left, right) => statusPriority(right.status) - statusPriority(left.status),
+    )[0];
+    return [primary];
+  }
+
+  return lights;
+}
+
 function render() {
-  const visibleProjectIds = new Set(lights.map((light) => light.project_id));
+  const displayLights = lightsForDisplay();
+  const visibleProjectIds = new Set(displayLights.map((light) => light.project_id));
   appHandle.hidden = lights.length > 0;
 
-  for (const light of lights) {
+  for (const light of displayLights) {
     let element = lightElements.get(light.project_id);
     if (!element) {
       element = createProjectLight(light);
@@ -117,6 +179,33 @@ function render() {
     if (!visibleProjectIds.has(projectId)) {
       element.remove();
       lightElements.delete(projectId);
+    }
+  }
+
+  const activeDrawerProjectId = getCurrentDrawerProjectId();
+  for (const [projectId, element] of lightElements) {
+    element.classList.toggle(
+      "is-drawer-active",
+      isDrawerOpen() &&
+        ((getDrawerMode() === "projects" && displayMode === "compact") ||
+          projectId === activeDrawerProjectId),
+    );
+  }
+
+  if (isDrawerOpen() && getDrawerMode() === "projects" && displayMode === "compact") {
+    updateProjectDrawer(drawer, lights);
+  } else if (isDrawerOpen() && activeDrawerProjectId) {
+    const activeLight = lights.find(
+      (light) => light.project_id === activeDrawerProjectId,
+    );
+    if (activeLight && activeLight.sessions.length > 1) {
+      updateDrawer(
+        drawer,
+        activeLight.sessions,
+        activeLight.project_label || activeLight.project_id,
+      );
+    } else {
+      hideDrawer();
     }
   }
 
@@ -165,11 +254,22 @@ function createProjectLight(lightState) {
     const status = root.dataset.status;
     const sessions = root.lightState?.sessions || [];
 
+    if (displayMode === "compact" && lights.length > 1) {
+      event.stopPropagation();
+      hideMenu();
+      showProjectDrawer(drawer, lights);
+      scheduleWindowResize();
+      return;
+    }
+
     // If multiple sessions, show drawer instead of confirming
     if (sessions.length > 1) {
       event.stopPropagation();
-      showDrawer(projectId, drawer);
-      updateDrawer(drawer, sessions);
+      hideMenu();
+      const projectLabel =
+        root.lightState?.project_label || root.lightState?.project_id || "";
+      showDrawer(projectId, drawer, projectLabel);
+      updateDrawer(drawer, sessions, projectLabel);
       scheduleWindowResize();
       return;
     }
@@ -182,6 +282,10 @@ function createProjectLight(lightState) {
 
   root.addEventListener("contextmenu", (event) => {
     event.preventDefault();
+    event.stopPropagation();
+    if (isDrawerOpen()) {
+      hideDrawer();
+    }
     const projectId = root.dataset.projectId;
     showMenu(event.clientX, event.clientY, [
       ["打开", () => safeInvoke("open_project", { projectId })],
@@ -235,7 +339,10 @@ function updateProjectLight(root, lightState) {
   const badge = root.querySelector(".session-badge");
   const sessions = lightState.sessions || [];
   if (badge) {
-    if (shouldShowBadge(sessions)) {
+    if (displayMode === "compact" && lights.length > 1) {
+      badge.textContent = `${lights.length}`;
+      badge.classList.remove("hidden");
+    } else if (shouldShowBadge(sessions)) {
       badge.textContent = getBadgeText(sessions);
       badge.classList.remove("hidden");
     } else {
@@ -341,8 +448,9 @@ async function resizeWindowToContent() {
   }
 
   if (!drawer.hidden) {
-    const drawerRect = drawer.getBoundingClientRect();
-    width = Math.max(width, Math.ceil(drawerRect.right + MENU_EDGE_GUTTER));
+    const drawerPanel = drawer.querySelector(".session-drawer");
+    const drawerRect = (drawerPanel || drawer).getBoundingClientRect();
+    width = Math.ceil(drawerRect.right + MENU_EDGE_GUTTER);
     height = Math.max(height, Math.ceil(drawerRect.bottom + MENU_EDGE_GUTTER));
   }
 
@@ -393,11 +501,16 @@ function shouldStartDrag(event) {
     return false;
   }
 
-  if (event.target.closest(".menu, button")) {
+  if (
+    event.target.closest(
+      ".menu, button, #drawer, .session-drawer, .session-row, .drawer-close",
+    )
+  ) {
     return false;
   }
 
-  return Boolean(event.target.closest("#lights-container, .traffic-light"));
+  // Drag only from the project label so lamp clicks still open/switch the drawer.
+  return Boolean(event.target.closest(".light-label"));
 }
 
 async function safeInvoke(command, payload) {
@@ -469,6 +582,26 @@ async function showDiagnostics() {
   alert(text);
 }
 
-refreshLights();
-scheduleWindowResize();
+async function loadUiConfig() {
+  const config = await safeInvoke("get_ui_config");
+  if (config?.displayMode) {
+    displayMode = config.displayMode;
+  }
+}
+
+loadUiConfig().then(() => {
+  refreshLights();
+  scheduleWindowResize();
+});
 window.setInterval(refreshLights, 1000);
+
+currentWindow
+  ?.listen?.("tauri://move", async () => {
+    try {
+      const pos = await currentWindow.outerPosition();
+      if (pos) {
+        await safeInvoke("persist_window_position", { x: pos.x, y: pos.y });
+      }
+    } catch {}
+  })
+  .catch?.(() => {});

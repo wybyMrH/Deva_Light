@@ -21,6 +21,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 
 ai_light_url="${1:-${AI_LIGHT_URL:-}}"
+ai_light_token="${AI_LIGHT_TOKEN:-}"
 if [[ -z "$ai_light_url" ]]; then
   usage >&2
   exit 2
@@ -59,7 +60,7 @@ chmod 755 "$hook_dest"
 
 mkdir -p "$(dirname "$settings_path")"
 
-python3 - "$settings_path" "$hook_dest" "$ai_light_url" <<'PY'
+python3 - "$settings_path" "$hook_dest" "$ai_light_url" "$ai_light_token" <<'PY'
 import json
 import shlex
 import sys
@@ -69,6 +70,7 @@ from pathlib import Path
 settings_path = Path(sys.argv[1])
 hook_path = sys.argv[2]
 ai_light_url = sys.argv[3]
+ai_light_token = sys.argv[4].strip()
 
 events = [
     ("SessionStart", "session-start"),
@@ -99,7 +101,10 @@ hooks = data.setdefault("hooks", {})
 if not isinstance(hooks, dict):
     raise SystemExit("settings hooks field must be a JSON object")
 
-command_prefix = f"AI_LIGHT_URL={shlex.quote(ai_light_url)} {shlex.quote(hook_path)}"
+command_prefix = f"AI_LIGHT_URL={shlex.quote(ai_light_url)}"
+if ai_light_token:
+    command_prefix += f" AI_LIGHT_TOKEN={shlex.quote(ai_light_token)}"
+command_prefix += f" {shlex.quote(hook_path)}"
 
 def contains_ai_light_hook(entry):
     if not isinstance(entry, dict):
@@ -135,6 +140,8 @@ settings_path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", 
 print(f"installed hook: {hook_path}")
 print(f"configured settings: {settings_path}")
 print(f"AI_LIGHT_URL: {ai_light_url}")
+if ai_light_token:
+    print("AI_LIGHT_TOKEN: (set)")
 if backup_path:
     print(f"backup: {backup_path}")
 PY

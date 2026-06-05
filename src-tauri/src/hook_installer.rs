@@ -1,7 +1,7 @@
 #[cfg(target_os = "windows")]
 use crate::codex_paths::{parse_wsl_distro_list, path_from_console_output, run_wsl_command};
 #[cfg(target_os = "windows")]
-use crate::config::load_runtime_config;
+use crate::config::{load_app_config, load_runtime_config};
 use crate::logging::{log_info, log_warn};
 use serde_json::{json, Value};
 use std::fs;
@@ -33,6 +33,24 @@ pub fn get_hook_binary_path() -> PathBuf {
         .join(hook_binary_name())
 }
 
+fn set_hook_binary_executable(path: &Path) -> Result<(), std::io::Error> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut permissions = fs::metadata(path)?.permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions)?;
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+
+    Ok(())
+}
+
 pub fn install_hook_binary_from_resource(resource_dir: &Path) -> Result<bool, std::io::Error> {
     let Some(source) = bundled_hook_candidates(resource_dir)
         .into_iter()
@@ -54,7 +72,8 @@ pub fn install_hook_binary_from_resource(resource_dir: &Path) -> Result<bool, st
         fs::create_dir_all(parent)?;
     }
 
-    fs::copy(source, destination)?;
+    fs::copy(source, &destination)?;
+    set_hook_binary_executable(&destination)?;
     log_info(
         "hook_installer",
         "copied bundled hook helper into config directory",
@@ -107,6 +126,8 @@ pub fn install_hooks() -> Result<(), Box<dyn std::error::Error>> {
         return Err(format!("hook binary not found: {}", hook_path.display()).into());
     }
 
+    set_hook_binary_executable(&hook_path)?;
+
     let existing = if settings_path.exists() {
         read_settings_json(&settings_path)?
     } else {
@@ -128,6 +149,16 @@ pub fn install_hooks() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(target_os = "windows")]
     install_wsl_hooks()?;
 
+    Ok(())
+}
+
+pub fn refresh_wsl_hooks() -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(target_os = "windows")]
+    {
+        return install_wsl_hooks();
+    }
+
+    #[cfg(not(target_os = "windows"))]
     Ok(())
 }
 
@@ -177,6 +208,11 @@ fn install_wsl_hooks() -> Result<(), Box<dyn std::error::Error>> {
         );
         return Ok(());
     };
+    let app_config = load_app_config();
+    let http_token = runtime
+        .http_token
+        .as_deref()
+        .or(app_config.http_token.as_deref());
 
     let Some(wsl_hook_path) = windows_path_to_wsl_path(&get_hook_binary_path()) else {
         log_warn(
@@ -208,7 +244,12 @@ fn install_wsl_hooks() -> Result<(), Box<dyn std::error::Error>> {
             let _ = fs::copy(&settings_path, backup_path);
         }
 
-        let merged = merge_wsl_hooks(existing, &wsl_hook_path, runtime.http_port)?;
+        let merged = merge_wsl_hooks(
+            existing,
+            &wsl_hook_path,
+            runtime.http_port,
+            http_token,
+        )?;
         fs::write(&settings_path, serde_json::to_string_pretty(&merged)?)?;
         installed += 1;
         log_info(
@@ -388,16 +429,23 @@ pub fn hook_binary_is_current(source: &Path, destination: &Path) -> Result<bool,
     Ok(fs::read(source)? == fs::read(destination)?)
 }
 
-pub fn wsl_ai_light_url_prefix(port: u16) -> String {
-    format!(
+pub fn wsl_ai_light_url_prefix(port: u16, token: Option<&str>) -> String {
+    let mut parts = vec![format!(
         "AI_LIGHT_URL=http://$(grep -m1 '^nameserver ' /etc/resolv.conf 2>/dev/null | awk '{{print $2}}' || echo 127.0.0.1):{port}/events"
-    )
+    )];
+
+    if let Some(token) = token.filter(|value| !value.is_empty()) {
+        parts.push(format!("AI_LIGHT_TOKEN={}", sh_single_quote(token)));
+    }
+
+    parts.join(" ")
 }
 
 pub fn merge_wsl_hooks(
     existing: Value,
     hook_path: &str,
     http_port: u16,
+    http_token: Option<&str>,
 ) -> Result<Value, String> {
     if !existing.is_object() {
         return Err("settings root must be a JSON object".to_string());
@@ -413,7 +461,11 @@ pub fn merge_wsl_hooks(
         .and_then(Value::as_object_mut)
         .ok_or_else(|| "settings hooks field must be a JSON object".to_string())?;
 
-    let command_prefix = format!("{} {}", wsl_ai_light_url_prefix(http_port), sh_single_quote(hook_path));
+    let command_prefix = format!(
+        "{} {}",
+        wsl_ai_light_url_prefix(http_port, http_token),
+        sh_single_quote(hook_path)
+    );
 
     for (claude_event, hook_event) in HOOK_EVENTS {
         let event_hooks = hooks

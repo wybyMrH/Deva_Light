@@ -1,6 +1,6 @@
 # Building Deva Light
 
-Last updated: 2026-06-03
+Last updated: 2026-06-06
 
 Deva Light is a Tauri 2 desktop app with two Rust binaries:
 
@@ -149,7 +149,7 @@ macOS notes:
 - Local unsigned builds may work for personal testing.
 - Public distribution needs Apple signing and notarization.
 - Ensure the packaged app includes `deva-light-hook` as a resource.
-- Add a proper `.icns` icon before macOS packaging polish.
+- `.icns` is generated automatically from `icons/icon.png` during `cargo build`.
 
 ## Platform-Specific Resource Config
 

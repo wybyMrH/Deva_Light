@@ -115,6 +115,7 @@ fn merge_wsl_hooks_embeds_ai_light_url_and_wsl_command() {
         json!({}),
         "/mnt/c/Users/Admin/.deva_light/bin/deva-light-hook.exe",
         55_548,
+        Some("secret-token"),
     )
     .unwrap();
     let hook = &merged["hooks"]["Notification"][0]["hooks"][0];
@@ -123,14 +124,14 @@ fn merge_wsl_hooks_embeds_ai_light_url_and_wsl_command() {
         hook["command"],
         format!(
             "{} '/mnt/c/Users/Admin/.deva_light/bin/deva-light-hook.exe' notification",
-            wsl_ai_light_url_prefix(55_548)
+            wsl_ai_light_url_prefix(55_548, Some("secret-token"))
         )
     );
 }
 
 #[test]
 fn wsl_ai_light_url_prefix_resolves_windows_host_at_runtime() {
-    let prefix = wsl_ai_light_url_prefix(17_321);
+    let prefix = wsl_ai_light_url_prefix(17_321, None);
     assert!(prefix.contains("nameserver"));
     assert!(prefix.contains("17321/events"));
     assert!(prefix.contains("127.0.0.1"));

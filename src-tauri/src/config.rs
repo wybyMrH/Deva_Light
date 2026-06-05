@@ -4,6 +4,19 @@ use std::io;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DisplayMode {
+    Parallel,
+    Compact,
+}
+
+impl Default for DisplayMode {
+    fn default() -> Self {
+        Self::Parallel
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct AppConfig {
     pub window_x: i32,
@@ -12,11 +25,15 @@ pub struct AppConfig {
     pub hooks_installed: bool,
     pub http_bind: String,
     pub http_port: Option<u16>,
+    pub http_token: Option<String>,
     pub always_on_top: bool,
     pub notifications_enabled: bool,
     pub notify_on_waiting: bool,
     pub notify_on_done: bool,
     pub codex_session_paths: Vec<String>,
+    pub display_mode: DisplayMode,
+    pub remote_ssh_target: Option<String>,
+    pub remote_codex_via_ssh: bool,
 }
 
 impl Default for AppConfig {
@@ -33,6 +50,10 @@ impl Default for AppConfig {
             notify_on_waiting: true,
             notify_on_done: false,
             codex_session_paths: Vec::new(),
+            http_token: None,
+            display_mode: DisplayMode::Parallel,
+            remote_ssh_target: None,
+            remote_codex_via_ssh: true,
         }
     }
 }
@@ -40,6 +61,38 @@ impl Default for AppConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RuntimeConfig {
     pub http_port: u16,
+    #[serde(default)]
+    pub http_token: Option<String>,
+}
+
+pub fn ensure_http_token(config: &mut AppConfig) -> Option<String> {
+    if config.http_bind != "0.0.0.0" {
+        return config.http_token.clone();
+    }
+
+    if config.http_token.is_none() {
+        config.http_token = Some(generate_http_token());
+    }
+
+    config.http_token.clone()
+}
+
+pub fn generate_http_token() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    let counter = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+
+    format!(
+        "{:016x}{:016x}",
+        nanos ^ (std::process::id() as u128),
+        counter ^ (std::process::id() as u64)
+    )
 }
 
 pub fn get_config_dir() -> PathBuf {

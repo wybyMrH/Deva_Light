@@ -199,6 +199,7 @@ impl StateAggregator {
     /// Confirm a single session (acknowledge waiting status or remove done)
     pub fn confirm_session(&self, session_id: &str) {
         let mut changed = false;
+        let mut remove_tracking = false;
 
         {
             let mut state = self.state.write().expect("aggregator state lock poisoned");
@@ -217,12 +218,11 @@ impl StateAggregator {
             {
                 match session.status {
                     Status::Done => {
-                        // Remove the session
                         light.sessions.retain(|s| s.session_id != session_id);
                         changed = true;
+                        remove_tracking = true;
                     }
                     Status::Waiting => {
-                        // Acknowledge waiting, reset to idle
                         session.status = Status::Idle;
                         light.last_event_at = Instant::now();
                         light.aggregate_status();
@@ -232,8 +232,7 @@ impl StateAggregator {
                 }
             }
 
-            // Handle Done status cleanup outside the light borrow
-            if changed {
+            if changed && remove_tracking {
                 state.session_to_project.remove(session_id);
                 if let Some(light) = state.lights.get(&project_id) {
                     if light.sessions.is_empty() {
@@ -256,6 +255,34 @@ impl StateAggregator {
             .iter()
             .filter_map(|project_id| state.lights.get(project_id).cloned())
             .collect()
+    }
+
+    pub fn set_task_name(&self, session_id: &str, task_name: String) {
+        let display = summarize_task_name(task_name);
+        let mut changed = false;
+
+        {
+            let mut state = self.state.write().expect("aggregator state lock poisoned");
+            let Some(project_id) = state.session_to_project.get(session_id).cloned() else {
+                return;
+            };
+
+            if let Some(light) = state.lights.get_mut(&project_id) {
+                if let Some(session) = light
+                    .sessions
+                    .iter_mut()
+                    .find(|session| session.session_id == session_id)
+                {
+                    session.task_name = Some(display);
+                    light.last_event_at = Instant::now();
+                    changed = true;
+                }
+            }
+        }
+
+        if changed {
+            self.notify_change();
+        }
     }
 
     pub fn set_last_tool_call(&self, session_id: &str, tool_call: String) {
@@ -325,6 +352,18 @@ fn remove_existing_session(state: &mut AggregatorState, session_id: &str) {
 
     if should_remove {
         remove_light_by_project(state, &project_id);
+    }
+}
+
+fn summarize_task_name(task_name: String) -> String {
+    let collapsed = task_name.split_whitespace().collect::<Vec<_>>().join(" ");
+    const MAX_LEN: usize = 48;
+
+    if collapsed.chars().count() <= MAX_LEN {
+        collapsed
+    } else {
+        let truncated: String = collapsed.chars().take(MAX_LEN.saturating_sub(1)).collect();
+        format!("{truncated}…")
     }
 }
 

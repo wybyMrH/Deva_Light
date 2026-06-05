@@ -2,10 +2,13 @@
  * Session Drawer Styles
  */
 
+#drawer {
+  flex-shrink: 0;
+  align-self: flex-start;
+}
+
 .session-drawer {
-  position: fixed;
-  right: 0;
-  top: 0;
+  position: relative;
   width: 200px;
   max-height: 300px;
   background: rgba(30, 30, 30, 0.95);

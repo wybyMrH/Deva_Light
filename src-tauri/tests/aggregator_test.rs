@@ -40,6 +40,47 @@ fn remove_working_session_removes_empty_light() {
 }
 
 #[test]
+fn set_task_name_updates_session_label() {
+    let agg = StateAggregator::new();
+    let cwd = PathBuf::from("/home/user/project");
+
+    agg.add_session("s1".to_string(), Tool::ClaudeCode, &cwd, Status::Working);
+    agg.set_task_name("s1", "Fix the drawer switching bug".to_string());
+
+    let lights = agg.get_lights();
+    assert_eq!(
+        lights[0].sessions[0].task_name.as_deref(),
+        Some("Fix the drawer switching bug")
+    );
+}
+
+#[test]
+fn confirm_waiting_session_keeps_tracking() {
+    let agg = StateAggregator::new();
+    let cwd = PathBuf::from("/home/user/project");
+
+    agg.add_session("s1".to_string(), Tool::ClaudeCode, &cwd, Status::Waiting);
+    agg.confirm_session("s1");
+
+    let lights = agg.get_lights();
+    assert_eq!(lights.len(), 1);
+    assert_eq!(lights[0].status, Status::Idle);
+    assert_eq!(agg.session_status("s1"), Some(Status::Idle));
+}
+
+#[test]
+fn confirm_done_session_removes_tracking() {
+    let agg = StateAggregator::new();
+    let cwd = PathBuf::from("/home/user/project");
+
+    agg.add_session("s1".to_string(), Tool::ClaudeCode, &cwd, Status::Done);
+    agg.confirm_session("s1");
+
+    assert!(agg.get_lights().is_empty());
+    assert_eq!(agg.session_status("s1"), None);
+}
+
+#[test]
 fn done_light_is_removed_when_session_ends() {
     let agg = StateAggregator::new();
     let cwd = PathBuf::from("/home/user/project");

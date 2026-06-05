@@ -4,6 +4,8 @@ use crate::codex_paths::{
     CodexSessionRootSummary,
 };
 use crate::config::load_app_config;
+use crate::monitoring::is_monitoring_paused;
+use crate::ssh_remote::{is_ssh_virtual_path, read_rollout_from_offset, rollout_modified};
 use crate::logging::{log_error, log_info, log_warn};
 use crate::types::{Status, Tool};
 use serde_json::Value;
@@ -62,6 +64,11 @@ fn run_codex_watcher(aggregator: Arc<StateAggregator>) {
     log_root_summary("watching Codex session roots", &roots);
 
     loop {
+        if is_monitoring_paused() {
+            thread::sleep(POLL_INTERVAL);
+            continue;
+        }
+
         let next_roots = codex_session_root_summary_for_auto(&auto_roots, &load_app_config());
         if next_roots != roots {
             log_root_summary("reloaded Codex session roots", &next_roots);
@@ -212,6 +219,10 @@ fn initialize_existing_rollout(
     path: &Path,
     watched: &mut WatchedRollout,
 ) -> io::Result<()> {
+    if is_ssh_virtual_path(path) {
+        return initialize_existing_rollout_ssh(aggregator, path, watched);
+    }
+
     let file = File::open(path)?;
     let mut reader = BufReader::new(file);
     let mut line = String::new();
@@ -234,9 +245,7 @@ fn initialize_existing_rollout(
     }
 
     watched.offset = reader.stream_position()?;
-    watched.last_activity_at = fs::metadata(path)
-        .and_then(|metadata| metadata.modified())
-        .unwrap_or_else(|_| SystemTime::now());
+    watched.last_activity_at = rollout_modified_at(path).unwrap_or_else(|_| SystemTime::now());
     restore_existing_rollout(aggregator, path, watched, last_tool_call)?;
     Ok(())
 }
@@ -251,7 +260,7 @@ fn restore_existing_rollout(
         return Ok(());
     };
 
-    let modified = fs::metadata(path)?.modified()?;
+    let modified = rollout_modified_at(path)?;
     let Ok(age) = SystemTime::now().duration_since(modified) else {
         return Ok(());
     };
@@ -286,6 +295,10 @@ fn process_new_lines(
     files: &mut HashMap<PathBuf, WatchedRollout>,
     path: &Path,
 ) -> io::Result<()> {
+    if is_ssh_virtual_path(path) {
+        return process_new_lines_ssh(aggregator, files, path);
+    }
+
     let Some(watched) = files.get_mut(path) else {
         return Ok(());
     };
@@ -388,7 +401,7 @@ fn update_inactive_session(
         return Ok(());
     };
 
-    let modified = fs::metadata(path)?.modified()?;
+    let modified = rollout_modified_at(path)?;
     let Ok(age) = SystemTime::now().duration_since(modified) else {
         return Ok(());
     };
@@ -510,7 +523,82 @@ pub fn parse_codex_line(line: &str) -> serde_json::Result<CodexLineEvent> {
     }
 }
 
+fn rollout_modified_at(path: &Path) -> io::Result<SystemTime> {
+    if is_ssh_virtual_path(path) {
+        rollout_modified(path).map_err(|error| io::Error::new(io::ErrorKind::Other, error))
+    } else {
+        fs::metadata(path)?.modified()
+    }
+}
+
+fn initialize_existing_rollout_ssh(
+    aggregator: &StateAggregator,
+    path: &Path,
+    watched: &mut WatchedRollout,
+) -> io::Result<()> {
+    let (content, new_offset) = read_rollout_from_offset(path, 0)
+        .map_err(|error| io::Error::new(io::ErrorKind::Other, error))?;
+    let mut last_tool_call = None;
+
+    for line in content.lines() {
+        match parse_codex_line(line) {
+            Ok(CodexLineEvent::SessionMeta(meta)) => watched.meta = Some(meta),
+            Ok(CodexLineEvent::Status(status)) => watched.last_status = Some(status),
+            Ok(CodexLineEvent::ToolCall(tool_call)) => last_tool_call = Some(tool_call),
+            Ok(CodexLineEvent::Ignore) => {}
+            Err(error) => log_watcher_error(&format!("parse {}", path.display()), &error),
+        }
+    }
+
+    watched.offset = new_offset;
+    watched.last_activity_at = rollout_modified_at(path).unwrap_or_else(|_| SystemTime::now());
+    restore_existing_rollout(aggregator, path, watched, last_tool_call)
+}
+
+fn process_new_lines_ssh(
+    aggregator: &StateAggregator,
+    files: &mut HashMap<PathBuf, WatchedRollout>,
+    path: &Path,
+) -> io::Result<()> {
+    let Some(watched) = files.get_mut(path) else {
+        return Ok(());
+    };
+
+    let (chunk, new_offset) = read_rollout_from_offset(path, watched.offset)
+        .map_err(|error| io::Error::new(io::ErrorKind::Other, error))?;
+
+    if chunk.is_empty() {
+        return Ok(());
+    }
+
+    let mut processable = chunk.as_str();
+    let mut final_offset = new_offset;
+
+    if !chunk.ends_with('\n') {
+        let Some(last_newline) = chunk.rfind('\n') else {
+            return Ok(());
+        };
+        processable = &chunk[..=last_newline];
+        final_offset = watched.offset + processable.len() as u64;
+    }
+
+    for line in processable.lines() {
+        match parse_codex_line(line) {
+            Ok(event) => apply_codex_event(aggregator, watched, event),
+            Err(error) => log_watcher_error(&format!("parse {}", path.display()), &error),
+        }
+    }
+
+    watched.offset = final_offset;
+    Ok(())
+}
+
 fn find_rollout_files(root: &Path, tracked_paths: &HashSet<PathBuf>) -> io::Result<Vec<PathBuf>> {
+    if is_ssh_virtual_path(root) {
+        return crate::ssh_remote::list_rollout_files(root)
+            .map_err(|error| io::Error::new(io::ErrorKind::Other, error));
+    }
+
     let mut files = Vec::new();
 
     if !root.exists() {

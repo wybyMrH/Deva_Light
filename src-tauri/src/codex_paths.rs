@@ -1,4 +1,5 @@
 use crate::config::{load_app_config, AppConfig};
+use crate::ssh_remote::{discover_codex_sessions_dir, is_ssh_virtual_path, ssh_command};
 use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "windows")]
@@ -53,7 +54,11 @@ pub fn codex_session_root_summary_for_auto(
     auto_roots: &[PathBuf],
     config: &AppConfig,
 ) -> CodexSessionRootSummary {
-    let auto = auto_roots.to_vec();
+    let mut auto = auto_roots.to_vec();
+    for path in ssh_codex_sessions_dirs(config) {
+        push_unique(&mut auto, path);
+    }
+
     let manual = parse_manual_codex_sessions_dirs(config);
 
     let mut candidates = auto.clone();
@@ -126,6 +131,10 @@ pub fn is_wsl_unc_path(path: &Path) -> bool {
 }
 
 fn path_is_accessible(path: &Path) -> bool {
+    if is_ssh_virtual_path(path) {
+        return ssh_codex_root_is_accessible(path);
+    }
+
     #[cfg(target_os = "windows")]
     {
         if is_wsl_unc_path(path) {
@@ -134,6 +143,40 @@ fn path_is_accessible(path: &Path) -> bool {
     }
 
     path.exists()
+}
+
+fn ssh_codex_sessions_dirs(config: &AppConfig) -> Vec<PathBuf> {
+    if !config.remote_codex_via_ssh {
+        return Vec::new();
+    }
+
+    let Some(target) = config
+        .remote_ssh_target
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Vec::new();
+    };
+
+    discover_codex_sessions_dir(target).into_iter().collect()
+}
+
+fn ssh_codex_root_is_accessible(path: &Path) -> bool {
+    let Some((target, remote)) = crate::ssh_remote::parse_ssh_virtual_path(path) else {
+        return false;
+    };
+
+    ssh_command(
+        &target,
+        &format!(
+            "test -d {} && echo ok",
+            format!("'{}'", remote.replace('\'', "'\"'\"'"))
+        ),
+    )
+    .ok()
+    .as_deref()
+        == Some("ok")
 }
 
 pub fn auto_codex_sessions_dirs() -> Vec<PathBuf> {

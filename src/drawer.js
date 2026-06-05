@@ -2,14 +2,13 @@
  * Session Drawer Component
  *
  * Shows individual session status when a project has multiple sessions.
- * Drawer expands on the right side of the light group.
+ * Drawer expands to the right of the light group.
  *
- * Sorting: Waiting (yellow) > Working (red) > Done (green)
+ * Sorting: Waiting (yellow) > Working (green) > Done/Idle (red)
  */
 
-const DRAWER_AUTO_CLOSE_DELAY = 3000; // 3 seconds
-let drawerAutoCloseTimer = null;
 let currentDrawerProjectId = null;
+let drawerMode = "sessions";
 
 /**
  * Create drawer element for a project
@@ -44,32 +43,37 @@ export function createDrawer() {
 /**
  * Update drawer content with sessions
  */
-export function updateDrawer(drawer, sessions) {
-  const content = drawer.querySelector(".drawer-content");
-  if (!content) return;
+export function updateDrawer(drawerRoot, sessions, projectLabel = "") {
+  drawerMode = "sessions";
+  const panel = drawerRoot.querySelector(".session-drawer");
+  const content = drawerRoot.querySelector(".drawer-content");
+  const title = drawerRoot.querySelector(".drawer-title");
+  if (!content || !panel) return;
+
+  if (title) {
+    title.textContent = projectLabel ? `${projectLabel} · 会话` : "会话列表";
+  }
 
   content.replaceChildren();
 
-  // Sort sessions: Waiting > Working > Done/Idle
   const sorted = [...sessions].sort((a, b) => {
     const priority = { Waiting: 0, Working: 1, Done: 2, Idle: 3 };
     return (priority[a.status] || 99) - (priority[b.status] || 99);
   });
 
   for (const session of sorted) {
-    const row = createSessionRow(session);
-    content.appendChild(row);
+    content.appendChild(createSessionRow(session));
   }
 
-  // Update drawer visibility based on session count
   const shouldShow = sessions.length > 1;
-  if (shouldShow && drawer.hidden) {
-    drawer.hidden = false;
-    startAutoCloseTimer();
+  const wasHidden = drawerRoot.hidden;
+  drawerRoot.hidden = !shouldShow;
+  panel.hidden = !shouldShow;
+
+  if (shouldShow && wasHidden) {
     notifyVisibilityChange();
-  } else if (!shouldShow && !drawer.hidden) {
-    drawer.hidden = true;
-    stopAutoCloseTimer();
+  } else if (!shouldShow && !wasHidden) {
+    currentDrawerProjectId = null;
     notifyVisibilityChange();
   }
 }
@@ -83,18 +87,16 @@ function createSessionRow(session) {
   row.dataset.sessionId = session.session_id;
   row.dataset.status = session.status;
 
-  // Status indicator
   const indicator = document.createElement("div");
   indicator.className = `session-status status-${session.status.toLowerCase()}`;
   indicator.textContent = statusIcon(session.status);
 
-  // Session info
   const info = document.createElement("div");
   info.className = "session-info";
 
   const name = document.createElement("span");
   name.className = "session-name";
-  name.textContent = session.task_name || session.session_id;
+  name.textContent = session.task_name || shortenSessionId(session.session_id);
 
   const tool = document.createElement("span");
   tool.className = "session-tool";
@@ -102,20 +104,28 @@ function createSessionRow(session) {
 
   info.append(name, tool);
 
-  // Click handler for actionable statuses
   if (session.status === "Waiting" || session.status === "Done") {
     row.classList.add("is-actionable");
-    row.addEventListener("click", () => {
-      const sessionId = row.dataset.sessionId;
-      // Will call IPC to confirm session
+    row.addEventListener("click", (event) => {
+      event.stopPropagation();
       if (window.__TAURI__?.core) {
-        window.__TAURI__.core.invoke("confirm_session", { sessionId });
+        window.__TAURI__.core.invoke("confirm_session", {
+          sessionId: row.dataset.sessionId,
+        });
       }
     });
   }
 
   row.append(indicator, info);
   return row;
+}
+
+function shortenSessionId(sessionId) {
+  if (!sessionId || sessionId.length <= 16) {
+    return sessionId || "unknown";
+  }
+
+  return `${sessionId.slice(0, 8)}…${sessionId.slice(-4)}`;
 }
 
 /**
@@ -139,10 +149,93 @@ function statusIcon(status) {
 /**
  * Show drawer for a specific project
  */
-export function showDrawer(projectId, drawer) {
+export function updateProjectDrawer(drawerRoot, projects) {
+  drawerMode = "projects";
+  const panel = drawerRoot.querySelector(".session-drawer");
+  const content = drawerRoot.querySelector(".drawer-content");
+  const title = drawerRoot.querySelector(".drawer-title");
+  if (!content || !panel) return;
+
+  if (title) {
+    title.textContent = `项目列表 (${projects.length})`;
+  }
+
+  content.replaceChildren();
+
+  const sorted = [...projects].sort((a, b) => {
+    const priority = { Waiting: 0, Working: 1, Done: 2, Idle: 3 };
+    return (priority[a.status] || 99) - (priority[b.status] || 99);
+  });
+
+  for (const project of sorted) {
+    content.appendChild(createProjectRow(project));
+  }
+}
+
+function createProjectRow(project) {
+  const row = document.createElement("div");
+  row.className = "session-row project-row";
+  row.dataset.projectId = project.project_id;
+  row.dataset.status = project.status;
+
+  const indicator = document.createElement("div");
+  indicator.className = `session-status status-${project.status.toLowerCase()}`;
+  indicator.textContent = statusIcon(project.status);
+
+  const info = document.createElement("div");
+  info.className = "session-info";
+
+  const name = document.createElement("span");
+  name.className = "session-name";
+  name.textContent = project.project_label || project.project_id;
+
+  const tool = document.createElement("span");
+  tool.className = "session-tool";
+  tool.textContent = `${project.sessions?.length || 0} 个会话`;
+
+  info.append(name, tool);
+  row.append(indicator, info);
+  row.addEventListener("click", (event) => {
+    event.stopPropagation();
+    window.dispatchEvent(
+      new CustomEvent("drawer-project-selected", {
+        detail: { projectId: project.project_id },
+      }),
+    );
+  });
+
+  return row;
+}
+
+export function showProjectDrawer(drawerRoot, projects) {
+  drawerMode = "projects";
+  currentDrawerProjectId = "__projects__";
+  drawerRoot.hidden = false;
+
+  const panel = drawerRoot.querySelector(".session-drawer");
+  if (panel) {
+    panel.hidden = false;
+  }
+
+  updateProjectDrawer(drawerRoot, projects);
+  notifyVisibilityChange();
+}
+
+export function showDrawer(projectId, drawerRoot, projectLabel = "") {
+  drawerMode = "sessions";
   currentDrawerProjectId = projectId;
-  drawer.hidden = false;
-  startAutoCloseTimer();
+  drawerRoot.hidden = false;
+
+  const panel = drawerRoot.querySelector(".session-drawer");
+  if (panel) {
+    panel.hidden = false;
+  }
+
+  const title = drawerRoot.querySelector(".drawer-title");
+  if (title && projectLabel) {
+    title.textContent = `${projectLabel} · 会话`;
+  }
+
   notifyVisibilityChange();
 }
 
@@ -150,33 +243,31 @@ export function showDrawer(projectId, drawer) {
  * Hide drawer
  */
 export function hideDrawer() {
-  const drawer = document.getElementById("drawer");
-  if (drawer) {
-    drawer.hidden = true;
-    notifyVisibilityChange();
+  const drawerRoot = document.getElementById("drawer");
+  if (!drawerRoot) return;
+
+  drawerRoot.hidden = true;
+  const panel = drawerRoot.querySelector(".session-drawer");
+  if (panel) {
+    panel.hidden = true;
   }
+
   currentDrawerProjectId = null;
-  stopAutoCloseTimer();
+  drawerMode = "sessions";
+  notifyVisibilityChange();
 }
 
-/**
- * Start auto-close timer
- */
-function startAutoCloseTimer() {
-  stopAutoCloseTimer();
-  drawerAutoCloseTimer = setTimeout(() => {
-    hideDrawer();
-  }, DRAWER_AUTO_CLOSE_DELAY);
+export function getDrawerMode() {
+  return drawerMode;
 }
 
-/**
- * Stop auto-close timer
- */
-function stopAutoCloseTimer() {
-  if (drawerAutoCloseTimer) {
-    clearTimeout(drawerAutoCloseTimer);
-    drawerAutoCloseTimer = null;
-  }
+export function isDrawerOpen() {
+  const drawerRoot = document.getElementById("drawer");
+  return Boolean(drawerRoot && !drawerRoot.hidden);
+}
+
+export function getCurrentDrawerProjectId() {
+  return currentDrawerProjectId;
 }
 
 function notifyVisibilityChange() {
@@ -188,7 +279,7 @@ function notifyVisibilityChange() {
  */
 export function getBadgeText(sessions) {
   if (sessions.length <= 1) return "";
-  const completed = sessions.filter(s => s.status === "Done").length;
+  const completed = sessions.filter((s) => s.status === "Done").length;
   return `${completed}/${sessions.length}`;
 }
 

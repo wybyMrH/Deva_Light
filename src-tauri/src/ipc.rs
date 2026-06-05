@@ -1,12 +1,15 @@
 use deva_light::aggregator::StateAggregator;
 use deva_light::codex_paths::{codex_session_root_summary, format_paths};
 use deva_light::config::{
-    get_config_dir, get_config_path, get_lock_path, get_log_path, get_runtime_path,
-    load_app_config, load_runtime_config, save_app_config,
+    ensure_http_token, get_config_dir, get_config_path, get_lock_path, get_log_path,
+    get_runtime_path, load_app_config, load_runtime_config, save_app_config, DisplayMode,
 };
+use deva_light::monitoring::{is_monitoring_paused, set_monitoring_paused};
+use deva_light::remote::{build_remote_setup_info, RemoteSetupInfo};
 use deva_light::hook_installer::{
-    check_hooks_installed, install_hooks, preview_hook_config, remove_hooks,
+    check_hooks_installed, install_hooks, preview_hook_config, refresh_wsl_hooks, remove_hooks,
 };
+use deva_light::http_server::HttpServerController;
 use deva_light::logging::log_info;
 use deva_light::types::LightState;
 use serde::{Deserialize, Serialize};
@@ -14,7 +17,7 @@ use std::fs;
 use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tauri::{AppHandle, LogicalSize, Manager, PhysicalPosition, Position, Size, State};
+use tauri::{AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, Position, Size, State};
 
 #[derive(Debug, Serialize)]
 pub struct Diagnostics {
@@ -47,6 +50,17 @@ pub struct AppConfigView {
     pub notify_on_waiting: bool,
     pub notify_on_done: bool,
     pub codex_manual_paths: Vec<String>,
+    pub display_mode: String,
+    pub remote_ssh_target: Option<String>,
+    pub remote_codex_via_ssh: bool,
+    pub http_token: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveConfigResult {
+    pub runtime_port: Option<u16>,
+    pub http_reloaded: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -59,6 +73,16 @@ pub struct AppConfigUpdate {
     pub notify_on_waiting: Option<bool>,
     pub notify_on_done: Option<bool>,
     pub codex_manual_paths: Option<Vec<String>>,
+    pub display_mode: Option<String>,
+    pub remote_ssh_target: Option<String>,
+    pub remote_codex_via_ssh: Option<bool>,
+    pub regenerate_http_token: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiConfigView {
+    pub display_mode: String,
 }
 
 #[tauri::command]
@@ -118,15 +142,33 @@ pub fn get_app_config() -> AppConfigView {
         notify_on_waiting: config.notify_on_waiting,
         notify_on_done: config.notify_on_done,
         codex_manual_paths: config.codex_session_paths,
+        display_mode: display_mode_to_string(&config.display_mode),
+        remote_ssh_target: config.remote_ssh_target.clone(),
+        remote_codex_via_ssh: config.remote_codex_via_ssh,
+        http_token: config.http_token.clone(),
     }
 }
 
 #[tauri::command]
-pub fn save_app_config_command(update: AppConfigUpdate) -> Result<(), String> {
+pub fn get_ui_config() -> UiConfigView {
+    let config = load_app_config();
+    UiConfigView {
+        display_mode: display_mode_to_string(&config.display_mode),
+    }
+}
+
+#[tauri::command]
+pub fn save_app_config_command(
+    app: AppHandle,
+    http_server: State<Arc<HttpServerController>>,
+    aggregator: State<Arc<StateAggregator>>,
+    update: AppConfigUpdate,
+) -> Result<SaveConfigResult, String> {
     validate_http_bind(&update.http_bind)?;
     validate_http_port(update.http_port)?;
 
-    let mut config = load_app_config();
+    let previous = load_app_config();
+    let mut config = previous.clone();
     config.http_bind = update.http_bind;
     config.http_port = update.http_port;
     if let Some(always_on_top) = update.always_on_top {
@@ -144,18 +186,65 @@ pub fn save_app_config_command(update: AppConfigUpdate) -> Result<(), String> {
     if let Some(codex_manual_paths) = update.codex_manual_paths {
         config.codex_session_paths = normalize_codex_manual_paths(codex_manual_paths);
     }
+    if let Some(display_mode) = update.display_mode.as_deref() {
+        config.display_mode = parse_display_mode(display_mode)?;
+    }
+    if let Some(remote_ssh_target) = update.remote_ssh_target {
+        let trimmed = remote_ssh_target.trim().to_string();
+        config.remote_ssh_target = if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        };
+    }
+    if let Some(remote_codex_via_ssh) = update.remote_codex_via_ssh {
+        config.remote_codex_via_ssh = remote_codex_via_ssh;
+    }
+    if update.regenerate_http_token == Some(true) {
+        config.http_token = Some(deva_light::config::generate_http_token());
+    } else if config.http_bind == "0.0.0.0" {
+        let _ = ensure_http_token(&mut config);
+    }
 
     save_app_config(&config).map_err(|error| error.to_string())?;
+
+    let network_changed = previous.http_bind != config.http_bind
+        || previous.http_port != config.http_port
+        || previous.http_token != config.http_token
+        || update.regenerate_http_token == Some(true);
+
+    let mut runtime_port = load_runtime_config().map(|runtime| runtime.http_port);
+    let mut http_reloaded = false;
+
+    if network_changed {
+        runtime_port = Some(
+            http_server
+                .restart(Arc::clone(&aggregator), &config)
+                .map_err(|error| error.to_string())?,
+        );
+        http_reloaded = true;
+        if let Err(error) = refresh_wsl_hooks() {
+            log_info(
+                "ipc",
+                format!("saved config but failed to refresh WSL hooks: {error}"),
+            );
+        }
+    }
+
     log_info(
         "ipc",
         format!(
-            "saved app config http_bind={} http_port={:?} codex_manual_paths={}",
+            "saved app config http_bind={} http_port={:?} codex_manual_paths={} http_reloaded={http_reloaded}",
             config.http_bind,
             config.http_port,
             config.codex_session_paths.len()
         ),
     );
-    Ok(())
+    let _ = app.emit("config-changed", get_ui_config());
+    Ok(SaveConfigResult {
+        runtime_port,
+        http_reloaded,
+    })
 }
 
 #[tauri::command]
@@ -237,10 +326,32 @@ pub fn copy_path(project_id: String) -> String {
 }
 
 #[tauri::command]
-pub fn pause_monitoring() {}
+pub fn pause_monitoring() {
+    set_monitoring_paused(true);
+}
 
 #[tauri::command]
-pub fn resume_monitoring() {}
+pub fn resume_monitoring() {
+    set_monitoring_paused(false);
+}
+
+#[tauri::command]
+pub fn get_monitoring_paused() -> bool {
+    is_monitoring_paused()
+}
+
+#[tauri::command]
+pub fn get_remote_setup_info() -> Result<RemoteSetupInfo, String> {
+    build_remote_setup_info()
+}
+
+#[tauri::command]
+pub fn persist_window_position(x: i32, y: i32) -> Result<(), String> {
+    let mut config = load_app_config();
+    config.window_x = x;
+    config.window_y = y;
+    save_app_config(&config).map_err(|error| error.to_string())
+}
 
 #[tauri::command]
 pub fn open_settings(app: AppHandle) -> Result<(), String> {
@@ -314,6 +425,21 @@ fn validate_http_bind(bind: &str) -> Result<(), String> {
     bind.parse::<IpAddr>().map(|_| ()).map_err(|_| {
         "HTTP bind must be an IP address, for example 127.0.0.1 or 0.0.0.0".to_string()
     })
+}
+
+fn display_mode_to_string(mode: &DisplayMode) -> String {
+    match mode {
+        DisplayMode::Parallel => "parallel".to_string(),
+        DisplayMode::Compact => "compact".to_string(),
+    }
+}
+
+fn parse_display_mode(value: &str) -> Result<DisplayMode, String> {
+    match value {
+        "parallel" => Ok(DisplayMode::Parallel),
+        "compact" => Ok(DisplayMode::Compact),
+        _ => Err("display mode must be parallel or compact".to_string()),
+    }
 }
 
 fn validate_http_port(port: Option<u16>) -> Result<(), String> {

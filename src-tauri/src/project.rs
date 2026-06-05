@@ -6,15 +6,62 @@ use toml::Value as TomlValue;
 
 /// Identify the project represented by a working directory.
 ///
-/// Returns `(project_id, project_label)`, where `project_id` is the git root
-/// when available and otherwise the cwd fallback. `project_label` is the
-/// declared project name when available and otherwise the final path component.
+/// Returns `(project_id, project_label)`. `project_id` prefers a stable git
+/// remote identity, otherwise a normalized path key that merges WSL/Windows
+/// views of the same directory.
 pub fn identify_project(cwd: &Path) -> (String, String) {
     let project_path = find_git_root(cwd).unwrap_or_else(|| normalize_path(cwd));
-    let project_id = display_path(&project_path);
     let project_label = project_label(&project_path);
+    let project_id = git_remote_identity(&project_path)
+        .unwrap_or_else(|| normalize_path_key(&display_path(&project_path)));
 
     (project_id, project_label)
+}
+
+pub fn normalize_path_key(path: &str) -> String {
+    let mut normalized = strip_windows_verbatim_prefix(path).replace('\\', "/");
+
+    if let Some(rest) = normalized.strip_prefix("/mnt/") {
+        if let Some((drive, tail)) = rest.split_once('/') {
+            if drive.len() == 1 && drive.chars().all(|ch| ch.is_ascii_alphabetic()) {
+                normalized = format!("{drive}:/{tail}");
+            }
+        }
+    }
+
+    let lower = normalized.to_lowercase();
+    if lower.starts_with("//wsl.localhost/") || lower.starts_with("//wsl$/") {
+        let segments: Vec<&str> = normalized.split('/').filter(|part| !part.is_empty()).collect();
+        if segments.len() >= 3 {
+            let distro = segments[2].to_lowercase();
+            let tail = segments[3..].join("/").to_lowercase();
+            normalized = format!("wsl://{distro}/{tail}");
+        }
+    } else if normalized.len() >= 2 && normalized.as_bytes()[1] == b':' {
+        normalized = normalized.to_lowercase();
+    }
+
+    normalized
+}
+
+fn git_remote_identity(project_path: &Path) -> Option<String> {
+    let output = Command::new("git")
+        .args(["config", "--get", "remote.origin.url"])
+        .current_dir(project_path)
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let remote = String::from_utf8(output.stdout).ok()?;
+    let remote = remote.trim();
+    if remote.is_empty() {
+        None
+    } else {
+        Some(format!("git:{remote}"))
+    }
 }
 
 fn find_git_root(cwd: &Path) -> Option<PathBuf> {
@@ -170,6 +217,14 @@ mod tests {
         assert_eq!(project_label, "AI Light");
 
         std::fs::remove_dir_all(cwd).unwrap();
+    }
+
+    #[test]
+    fn normalizes_wsl_and_windows_paths_to_same_key() {
+        assert_eq!(
+            normalize_path_key("/mnt/c/Users/alice/projects/demo"),
+            normalize_path_key(r"C:\Users\alice\projects\demo")
+        );
     }
 
     #[test]
