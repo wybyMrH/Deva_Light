@@ -2,7 +2,7 @@ use crate::config::{load_app_config, AppConfig};
 use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "windows")]
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 #[cfg(target_os = "windows")]
 use std::time::{Duration, Instant};
 
@@ -15,8 +15,8 @@ const WSL_EXISTS_CHECK_TTL: Duration = Duration::from_secs(60);
 static WSL_CODEX_DIRS_CACHE: Mutex<Option<(Instant, Vec<PathBuf>)>> = Mutex::new(None);
 
 #[cfg(target_os = "windows")]
-static WSL_PATH_EXISTS_CACHE: Mutex<WslPathExistsCache> =
-    Mutex::new(WslPathExistsCache { entries: std::collections::HashMap::new() });
+static WSL_PATH_EXISTS_CACHE: LazyLock<Mutex<WslPathExistsCache>> =
+    LazyLock::new(|| Mutex::new(WslPathExistsCache::default()));
 
 #[cfg(target_os = "windows")]
 #[derive(Debug)]
