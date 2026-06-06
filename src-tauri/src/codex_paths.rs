@@ -380,7 +380,7 @@ mod tests {
     #[test]
     fn path_from_console_output_uses_first_non_empty_line() {
         let path = path_from_console_output(
-            b"\r\n\\\\wsl.localhost\\Ubuntu\\home\\hzj\\.codex\\sessions\r\nsecond line\r\n",
+            b"\r\n\\\\wsl.localhost\\Ubuntu\\home\\alice\\.codex\\sessions\r\nsecond line\r\n",
         );
         assert_eq!(
             path,

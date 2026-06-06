@@ -1,43 +1,26 @@
-# GitHub 推送指南
+# Git 推送指南
 
-由于 WSL 没有安装 GitHub CLI，请按以下步骤手动推送：
+## 日常推送
 
-## 方法一：在 Windows 上操作
+```bash
+cd /path/to/Deva_Light
+git push origin main
+```
 
-1. 打开 Windows PowerShell 或 Git Bash
-2. 进入项目目录：
-   ```powershell
-   cd C:\Users\alice\projects\demo
-   ```
+## 发布新版本
 
-3. 创建 GitHub 私有仓库并推送：
-   ```powershell
-   # 安装 GitHub CLI（如果没有）
-   # winget install GitHub.cli
+```bash
+git tag v0.1.12
+git push origin v0.1.12
+```
 
-   # 登录 GitHub
-   gh auth login
+推送 tag 后会自动触发 [Release workflow](https://github.com/wybyMrH/Deva_Light/actions)。
 
-   # 创建私有仓库并推送
-   gh repo create deva-light --private --source=. --push
-   ```
+## 使用 GitHub CLI（可选）
 
-## 方法二：手动创建仓库
+```bash
+gh auth login
+git push origin main
+```
 
-1. 访问 https://github.com/new
-2. 仓库名：`deva-light`
-3. 选择 **Private**
-4. 不要勾选 "Add a README file"（已有内容）
-5. 点击 "Create repository"
-
-6. 在 Windows 上推送：
-   ```powershell
-   cd C:\Users\alice\projects\demo
-   git remote add origin https://github.com/wybyMrH/deva-light.git
-   git branch -M main
-   git push -u origin main
-   ```
-
-## 推送后
-
-仓库地址：https://github.com/wybyMrH/deva-light
+仓库地址：https://github.com/wybyMrH/Deva_Light

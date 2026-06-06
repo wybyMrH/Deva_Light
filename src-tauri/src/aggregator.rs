@@ -1,3 +1,6 @@
+use crate::monitor_origin::{
+    compose_light_id, detect_monitor_origin, format_light_label,
+};
 use crate::project::identify_project;
 use crate::types::{LightState, SessionRef, Status, Tool};
 use std::collections::HashMap;
@@ -8,7 +11,7 @@ use std::time::Instant;
 #[derive(Default)]
 struct AggregatorState {
     lights: HashMap<String, LightState>,
-    session_to_project: HashMap<String, String>,
+    session_to_light: HashMap<String, String>,
     light_order: Vec<String>,
 }
 
@@ -24,20 +27,44 @@ impl StateAggregator {
     }
 
     pub fn add_session(&self, session_id: String, tool: Tool, cwd: &Path, status: Status) {
+        self.add_session_with_context(session_id, tool, cwd, status, None);
+    }
+
+    pub fn add_session_with_context(
+        &self,
+        session_id: String,
+        tool: Tool,
+        cwd: &Path,
+        status: Status,
+        context_path: Option<&Path>,
+    ) {
+        let (logical_project_id, project_label) = identify_project(cwd);
+        let origin = detect_monitor_origin(cwd, context_path);
+        let light_id = compose_light_id(&logical_project_id, origin);
+        let display_label = format_light_label(origin, &project_label);
+        let workspace_path = cwd.to_string_lossy().to_string();
+
         {
-            let (project_id, project_label) = identify_project(cwd);
             let mut state = self.state.write().expect("aggregator state lock poisoned");
 
             remove_existing_session(&mut state, &session_id);
 
-            if !state.lights.contains_key(&project_id) {
-                state.light_order.push(project_id.clone());
+            if !state.lights.contains_key(&light_id) {
+                state.light_order.push(light_id.clone());
             }
 
-            let light = state
-                .lights
-                .entry(project_id.clone())
-                .or_insert_with(|| LightState::new(project_id.clone(), project_label));
+            let light = state.lights.entry(light_id.clone()).or_insert_with(|| {
+                LightState::new(
+                    light_id.clone(),
+                    logical_project_id.clone(),
+                    display_label,
+                    origin,
+                )
+            });
+
+            if light.workspace_path.is_none() {
+                light.workspace_path = Some(workspace_path);
+            }
 
             light.sessions.push(SessionRef {
                 session_id: session_id.clone(),
@@ -45,16 +72,24 @@ impl StateAggregator {
                 status,
                 started_at: Instant::now(),
                 task_name: None,
-                source: None,
+                monitor_origin: Some(origin),
                 process_id: None,
             });
             light.last_event_at = Instant::now();
             light.aggregate_status();
 
-            state.session_to_project.insert(session_id, project_id);
+            state.session_to_light.insert(session_id, light_id);
         }
 
         self.notify_change();
+    }
+
+    pub fn workspace_path(&self, light_id: &str) -> Option<String> {
+        let state = self.state.read().expect("aggregator state lock poisoned");
+        state
+            .lights
+            .get(light_id)
+            .and_then(|light| light.workspace_path.clone())
     }
 
     pub fn update_session_status(&self, session_id: &str, new_status: Status) {
@@ -62,11 +97,11 @@ impl StateAggregator {
 
         {
             let mut state = self.state.write().expect("aggregator state lock poisoned");
-            let Some(project_id) = state.session_to_project.get(session_id).cloned() else {
+            let Some(light_id) = state.session_to_light.get(session_id).cloned() else {
                 return;
             };
 
-            if let Some(light) = state.lights.get_mut(&project_id) {
+            if let Some(light) = state.lights.get_mut(&light_id) {
                 if let Some(session) = light
                     .sessions
                     .iter_mut()
@@ -87,8 +122,8 @@ impl StateAggregator {
 
     pub fn session_status(&self, session_id: &str) -> Option<Status> {
         let state = self.state.read().expect("aggregator state lock poisoned");
-        let project_id = state.session_to_project.get(session_id)?;
-        let light = state.lights.get(project_id)?;
+        let light_id = state.session_to_light.get(session_id)?;
+        let light = state.lights.get(light_id)?;
 
         light
             .sessions
@@ -102,11 +137,11 @@ impl StateAggregator {
 
         {
             let mut state = self.state.write().expect("aggregator state lock poisoned");
-            let Some(project_id) = state.session_to_project.remove(session_id) else {
+            let Some(light_id) = state.session_to_light.remove(session_id) else {
                 return;
             };
 
-            let should_remove = if let Some(light) = state.lights.get_mut(&project_id) {
+            let should_remove = if let Some(light) = state.lights.get_mut(&light_id) {
                 light
                     .sessions
                     .retain(|session| session.session_id != session_id);
@@ -123,7 +158,7 @@ impl StateAggregator {
             };
 
             if should_remove {
-                remove_light_by_project(&mut state, &project_id);
+                remove_light_by_id(&mut state, &light_id);
             }
             changed = true;
         }
@@ -144,7 +179,7 @@ impl StateAggregator {
 
             match status {
                 Status::Done => {
-                    remove_light_by_project(&mut state, project_id);
+                    remove_light_by_id(&mut state, project_id);
                     changed = true;
                 }
                 Status::Waiting => {
@@ -157,7 +192,7 @@ impl StateAggregator {
                     };
 
                     if has_no_sessions {
-                        remove_light_by_project(&mut state, project_id);
+                        remove_light_by_id(&mut state, project_id);
                         changed = true;
                     } else {
                         let Some(light) = state.lights.get_mut(project_id) else {
@@ -188,7 +223,7 @@ impl StateAggregator {
     pub fn remove_light(&self, project_id: &str) {
         let removed = {
             let mut state = self.state.write().expect("aggregator state lock poisoned");
-            remove_light_by_project(&mut state, project_id)
+            remove_light_by_id(&mut state, project_id)
         };
 
         if removed {
@@ -196,18 +231,17 @@ impl StateAggregator {
         }
     }
 
-    /// Confirm a single session (acknowledge waiting status or remove done)
     pub fn confirm_session(&self, session_id: &str) {
         let mut changed = false;
         let mut remove_tracking = false;
 
         {
             let mut state = self.state.write().expect("aggregator state lock poisoned");
-            let Some(project_id) = state.session_to_project.get(session_id).cloned() else {
+            let Some(light_id) = state.session_to_light.get(session_id).cloned() else {
                 return;
             };
 
-            let Some(light) = state.lights.get_mut(&project_id) else {
+            let Some(light) = state.lights.get_mut(&light_id) else {
                 return;
             };
 
@@ -233,10 +267,10 @@ impl StateAggregator {
             }
 
             if changed && remove_tracking {
-                state.session_to_project.remove(session_id);
-                if let Some(light) = state.lights.get(&project_id) {
+                state.session_to_light.remove(session_id);
+                if let Some(light) = state.lights.get(&light_id) {
                     if light.sessions.is_empty() {
-                        remove_light_by_project(&mut state, &project_id);
+                        remove_light_by_id(&mut state, &light_id);
                     }
                 }
             }
@@ -253,7 +287,7 @@ impl StateAggregator {
         state
             .light_order
             .iter()
-            .filter_map(|project_id| state.lights.get(project_id).cloned())
+            .filter_map(|light_id| state.lights.get(light_id).cloned())
             .collect()
     }
 
@@ -263,11 +297,11 @@ impl StateAggregator {
 
         {
             let mut state = self.state.write().expect("aggregator state lock poisoned");
-            let Some(project_id) = state.session_to_project.get(session_id).cloned() else {
+            let Some(light_id) = state.session_to_light.get(session_id).cloned() else {
                 return;
             };
 
-            if let Some(light) = state.lights.get_mut(&project_id) {
+            if let Some(light) = state.lights.get_mut(&light_id) {
                 if let Some(session) = light
                     .sessions
                     .iter_mut()
@@ -290,11 +324,11 @@ impl StateAggregator {
 
         {
             let mut state = self.state.write().expect("aggregator state lock poisoned");
-            let Some(project_id) = state.session_to_project.get(session_id).cloned() else {
+            let Some(light_id) = state.session_to_light.get(session_id).cloned() else {
                 return;
             };
 
-            if let Some(light) = state.lights.get_mut(&project_id) {
+            if let Some(light) = state.lights.get_mut(&light_id) {
                 light.last_tool_call = Some(tool_call);
                 light.last_event_at = Instant::now();
                 changed = true;
@@ -331,11 +365,11 @@ impl StateAggregator {
 }
 
 fn remove_existing_session(state: &mut AggregatorState, session_id: &str) {
-    let Some(project_id) = state.session_to_project.remove(session_id) else {
+    let Some(light_id) = state.session_to_light.remove(session_id) else {
         return;
     };
 
-    let should_remove = if let Some(light) = state.lights.get_mut(&project_id) {
+    let should_remove = if let Some(light) = state.lights.get_mut(&light_id) {
         light
             .sessions
             .retain(|session| session.session_id != session_id);
@@ -351,7 +385,7 @@ fn remove_existing_session(state: &mut AggregatorState, session_id: &str) {
     };
 
     if should_remove {
-        remove_light_by_project(state, &project_id);
+        remove_light_by_id(state, &light_id);
     }
 }
 
@@ -367,19 +401,49 @@ fn summarize_task_name(task_name: String) -> String {
     }
 }
 
-fn remove_light_by_project(state: &mut AggregatorState, project_id: &str) -> bool {
+fn remove_light_by_id(state: &mut AggregatorState, light_id: &str) -> bool {
     let mut removed = false;
 
-    if let Some(light) = state.lights.remove(project_id) {
+    if let Some(light) = state.lights.remove(light_id) {
         for session in light.sessions {
-            state.session_to_project.remove(&session.session_id);
+            state.session_to_light.remove(&session.session_id);
         }
         removed = true;
     }
 
     state
         .light_order
-        .retain(|existing_project_id| existing_project_id != project_id);
+        .retain(|existing_light_id| existing_light_id != light_id);
 
     removed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::Tool;
+
+    #[test]
+    fn splits_same_logical_project_by_origin() {
+        let agg = StateAggregator::new();
+
+        agg.add_session(
+            "local".to_string(),
+            Tool::ClaudeCode,
+            Path::new(r"C:\Users\alice\projects\demo"),
+            Status::Working,
+        );
+        agg.add_session(
+            "remote".to_string(),
+            Tool::ClaudeCode,
+            Path::new("/home/user/demo"),
+            Status::Waiting,
+        );
+
+        let lights = agg.get_lights();
+        assert_eq!(lights.len(), 2);
+        assert!(lights.iter().any(|light| light.monitor_origin == MonitorOrigin::Local));
+        #[cfg(target_os = "windows")]
+        assert!(lights.iter().any(|light| light.monitor_origin == MonitorOrigin::Remote));
+    }
 }
