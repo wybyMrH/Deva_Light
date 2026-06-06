@@ -25,6 +25,8 @@ fn test_light_state_aggregation() {
         "/home/user/project".to_string(),
         "project".to_string(),
         MonitorOrigin::Local,
+        "local".to_string(),
+        "本地".to_string(),
     );
 
     // No sessions = Idle

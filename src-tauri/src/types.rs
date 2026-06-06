@@ -56,6 +56,10 @@ pub struct LightState {
     pub project_label: String,
     pub logical_project_id: String,
     pub monitor_origin: MonitorOrigin,
+    pub origin_key: String,
+    pub origin_detail: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin_display: Option<String>,
     pub status: Status,
     pub sessions: Vec<SessionRef>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -71,12 +75,17 @@ impl LightState {
         logical_project_id: String,
         project_label: String,
         monitor_origin: MonitorOrigin,
+        origin_key: String,
+        origin_detail: String,
     ) -> Self {
         Self {
             project_id,
             project_label,
             logical_project_id,
             monitor_origin,
+            origin_key,
+            origin_detail,
+            origin_display: None,
             status: Status::Idle,
             sessions: Vec::new(),
             workspace_path: None,
@@ -93,5 +102,12 @@ impl LightState {
             .map(|s| s.status)
             .max()
             .unwrap_or(Status::Idle);
+    }
+
+    /// A lamp is shown only while at least one session needs attention or is working.
+    pub fn is_active(&self) -> bool {
+        self.sessions
+            .iter()
+            .any(|session| matches!(session.status, Status::Working | Status::Waiting))
     }
 }

@@ -201,7 +201,10 @@ fn run_ssh(
         .map(str::to_string)
         .or_else(|| {
             load_app_config()
-                .ssh_identity_file
+                .normalized_ssh_targets()
+                .into_iter()
+                .find(|entry| entry.target == target)
+                .and_then(|entry| entry.identity_file)
                 .filter(|value| !value.trim().is_empty())
         });
 

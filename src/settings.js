@@ -28,10 +28,12 @@ const copyDiagnosticsButton = document.getElementById("copy-diagnostics");
 const openAppLogButton = document.getElementById("open-app-log");
 
 const alwaysOnTopCheckbox = document.getElementById("always-on-top");
-const remoteSshTargetInput = document.getElementById("remote-ssh-target");
+const sshTargetsListEl = document.getElementById("ssh-targets-list");
+const addSshTargetButton = document.getElementById("add-ssh-target");
+const originAliasesInput = document.getElementById("origin-aliases");
 const remoteCodexViaSshCheckbox = document.getElementById("remote-codex-via-ssh");
-const sshIdentityFileInput = document.getElementById("ssh-identity-file");
 const sshCodexPathEl = document.getElementById("ssh-codex-path");
+const diagnosticsPathsEl = document.getElementById("diagnostics-paths");
 const httpTokenEl = document.getElementById("http-token");
 const localAddressesEl = document.getElementById("local-addresses");
 const remoteInstallCommand = document.getElementById("remote-install-command");
@@ -39,8 +41,6 @@ const refreshRemoteButton = document.getElementById("refresh-remote");
 const copyInstallCommandButton = document.getElementById("copy-install-command");
 const copySshCommandButton = document.getElementById("copy-ssh-command");
 const regenerateTokenButton = document.getElementById("regenerate-token");
-const testSshButton = document.getElementById("test-ssh");
-const sshTestStatusEl = document.getElementById("ssh-test-status");
 
 const notificationsEnabledCheckbox = document.getElementById("notifications-enabled");
 const notifyWaitingCheckbox = document.getElementById("notify-waiting");
@@ -74,7 +74,9 @@ document.querySelectorAll('input[name="http-bind"]').forEach((input) => {
 notificationsEnabledCheckbox.addEventListener("change", syncNotificationOptions);
 
 saveButton.addEventListener("click", saveSettings);
-closeButton.addEventListener("click", () => currentWindow?.close());
+closeButton.addEventListener("click", closeSettings);
+configPathEl.addEventListener("click", openConfigDir);
+addSshTargetButton?.addEventListener("click", () => addSshTargetRow());
 installIntegrationButton.addEventListener("click", installIntegration);
 installCursorIntegrationButton?.addEventListener("click", installCursorIntegration);
 removeIntegrationButton.addEventListener("click", removeIntegration);
@@ -86,7 +88,6 @@ refreshRemoteButton.addEventListener("click", refreshRemoteSetup);
 copyInstallCommandButton.addEventListener("click", copyInstallCommand);
 copySshCommandButton.addEventListener("click", copySshCommand);
 regenerateTokenButton.addEventListener("click", regenerateToken);
-testSshButton.addEventListener("click", testSshConnection);
 checkUpdateButton.addEventListener("click", () => checkForUpdates(true));
 installUpdateButton.addEventListener("click", installUpdate);
 
@@ -172,15 +173,16 @@ async function loadSettings() {
     const config = await invoke("get_app_config");
     setHttpBind(config.httpBind || "127.0.0.1");
     portInput.value = config.httpPort ?? "";
-    configPathEl.textContent = config.configPath;
-    configPathEl.title = config.configPath;
+    const configDir = parentDir(config.configPath);
+    configPathEl.textContent = configDir || config.configPath;
+    configPathEl.title = `打开配置目录：${configDir || config.configPath}`;
     runtimePortEl.textContent = config.runtimePort ? String(config.runtimePort) : "未运行";
 
     alwaysOnTopCheckbox.checked = config.alwaysOnTop ?? true;
     setDisplayMode(config.displayMode || "parallel");
-    remoteSshTargetInput.value = config.remoteSshTarget || "";
+    renderSshTargets(config.remoteSshTargets || []);
+    originAliasesInput.value = formatOriginAliases(config.originAliases || []);
     remoteCodexViaSshCheckbox.checked = config.remoteCodexViaSsh ?? true;
-    sshIdentityFileInput.value = config.sshIdentityFile || "";
     httpTokenEl.textContent = config.httpToken || "未启用";
 
     notificationsEnabledCheckbox.checked = config.notificationsEnabled ?? true;
@@ -219,9 +221,9 @@ async function saveSettings() {
         notifyOnDone: notifyDoneCheckbox.checked,
         codexManualPaths: parseCodexManualPaths(),
         displayMode: getDisplayMode(),
-        remoteSshTarget: remoteSshTargetInput.value.trim(),
+        remoteSshTargets: collectSshTargets(),
         remoteCodexViaSsh: remoteCodexViaSshCheckbox.checked,
-        sshIdentityFile: sshIdentityFileInput.value.trim(),
+        originAliases: parseOriginAliases(),
       },
     });
 
@@ -363,32 +365,169 @@ function setUpdateStatus(message, ok) {
   if (ok === false) updateStatusEl.classList.add("error");
 }
 
-async function testSshConnection() {
-  setBusy(true);
-  setSshTestStatus("测试中…", null);
+function renderSshTargets(targets) {
+  sshTargetsListEl.replaceChildren();
+  const rows = targets.length > 0 ? targets : [{ target: "", identityFile: null }];
+  rows.forEach((entry) => addSshTargetRow(entry));
+}
+
+function formatOriginAliases(entries) {
+  return entries
+    .map((entry) => `${entry.key}=${entry.alias}`)
+    .join("\n");
+}
+
+function parseOriginAliases() {
+  return originAliasesInput.value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const index = line.indexOf("=");
+      if (index <= 0) return null;
+      return {
+        key: line.slice(0, index).trim(),
+        alias: line.slice(index + 1).trim(),
+      };
+    })
+    .filter(Boolean);
+}
+
+function addSshTargetRow(entry = { target: "", identityFile: null, label: null }) {
+  const row = document.createElement("div");
+  row.className = "ssh-target-row";
+
+  const targetField = document.createElement("label");
+  targetField.className = "field";
+  targetField.innerHTML = "<span>SSH 目标</span>";
+  const targetInput = document.createElement("input");
+  targetInput.type = "text";
+  targetInput.placeholder = "user@192.168.1.10";
+  targetInput.value = entry.target || "";
+  targetField.appendChild(targetInput);
+
+  const identityField = document.createElement("label");
+  identityField.className = "field";
+  identityField.innerHTML = "<span>私钥路径（可选）</span>";
+  const identityInput = document.createElement("input");
+  identityInput.type = "text";
+  identityInput.placeholder = "~/.ssh/id_ed25519";
+  identityInput.value = entry.identityFile || "";
+  identityField.appendChild(identityInput);
+
+  const labelField = document.createElement("label");
+  labelField.className = "field";
+  labelField.innerHTML = "<span>显示别名（可选）</span>";
+  const labelInput = document.createElement("input");
+  labelInput.type = "text";
+  labelInput.placeholder = "公司机";
+  labelInput.value = entry.label || "";
+  labelField.appendChild(labelInput);
+
+  const actions = document.createElement("div");
+  actions.className = "ssh-target-actions";
+
+  const testButton = document.createElement("button");
+  testButton.type = "button";
+  testButton.textContent = "测试";
+  testButton.addEventListener("click", () =>
+    testSshConnection(targetInput.value.trim(), identityInput.value.trim(), testButton),
+  );
+
+  const removeButton = document.createElement("button");
+  removeButton.type = "button";
+  removeButton.className = "danger";
+  removeButton.textContent = "删除";
+  removeButton.addEventListener("click", () => {
+    if (sshTargetsListEl.children.length <= 1) {
+      targetInput.value = "";
+      identityInput.value = "";
+      labelInput.value = "";
+      return;
+    }
+    row.remove();
+  });
+
+  const status = document.createElement("output");
+  status.className = "status-badge ssh-row-status";
+  status.setAttribute("aria-live", "polite");
+
+  actions.append(testButton, removeButton, status);
+  row.append(targetField, identityField, labelField, actions);
+  sshTargetsListEl.appendChild(row);
+}
+
+function collectSshTargets() {
+  return [...sshTargetsListEl.querySelectorAll(".ssh-target-row")]
+    .map((row) => {
+      const inputs = row.querySelectorAll("input");
+      const target = inputs[0]?.value.trim();
+      const identityFile = inputs[1]?.value.trim();
+      const label = inputs[2]?.value.trim();
+      if (!target) return null;
+      return {
+        target,
+        identityFile: identityFile || null,
+        label: label || null,
+      };
+    })
+    .filter(Boolean);
+}
+
+async function testSshConnection(sshTarget, sshIdentityFile, button) {
+  if (!sshTarget) {
+    setStatus("请先填写 SSH 目标。", true);
+    return;
+  }
+
+  const statusEl = button.parentElement.querySelector(".ssh-row-status");
+  button.disabled = true;
+  statusEl.textContent = "测试中…";
+  statusEl.classList.remove("ok", "error");
 
   try {
     const result = await invoke("test_ssh_connection", {
-      sshTarget: remoteSshTargetInput.value.trim() || null,
-      sshIdentityFile: sshIdentityFileInput.value.trim() || null,
+      sshTarget,
+      sshIdentityFile: sshIdentityFile || null,
     });
 
-    setSshTestStatus(result?.message || "测试完成", result?.ok);
+    statusEl.textContent = result?.message || "测试完成";
+    statusEl.classList.toggle("ok", Boolean(result?.ok));
+    statusEl.classList.toggle("error", result?.ok === false);
     if (result?.codexPath) {
       sshCodexPathEl.textContent = result.codexPath;
     }
   } catch (error) {
-    setSshTestStatus(String(error), false);
+    statusEl.textContent = String(error);
+    statusEl.classList.add("error");
   } finally {
-    setBusy(false);
+    button.disabled = false;
   }
 }
 
-function setSshTestStatus(message, ok) {
-  sshTestStatusEl.textContent = message;
-  sshTestStatusEl.classList.remove("ok", "error");
-  if (ok === true) sshTestStatusEl.classList.add("ok");
-  if (ok === false) sshTestStatusEl.classList.add("error");
+async function closeSettings() {
+  try {
+    await invoke("hide_settings");
+  } catch {
+    await currentWindow?.hide?.();
+    await currentWindow?.close?.();
+  }
+}
+
+async function openConfigDir() {
+  try {
+    await invoke("open_config_dir");
+  } catch (error) {
+    setStatus(String(error), true);
+  }
+}
+
+function parentDir(filePath) {
+  if (!filePath) return "";
+  const normalized = String(filePath).replace(/[\\/]+$/, "");
+  const index = Math.max(normalized.lastIndexOf("/"), normalized.lastIndexOf("\\"));
+  if (index <= 0) return normalized;
+  return normalized.slice(0, index);
 }
 
 async function installIntegration() {
@@ -472,8 +611,11 @@ async function refreshRemoteSetup() {
       remote?.localAddresses?.join(", ") || remote?.primaryHost || "未检测到";
     remoteInstallCommand.value =
       remote?.curlInstallCommand || remote?.installCommand || "";
+    const sshPaths = (remote?.sshTargets || [])
+      .map((entry) => entry.sshCodexPath)
+      .filter(Boolean);
     sshCodexPathEl.textContent =
-      remote?.sshCodexPath || "未检测到（请先测试 SSH 连接）";
+      sshPaths.join("\n") || remote?.sshCodexPath || "未检测到（请先测试 SSH 连接）";
     copySshCommandButton.disabled = !remote?.sshInstallCommand;
     window.__lastRemoteSetup = remote;
   } catch (error) {
@@ -520,9 +662,9 @@ async function regenerateToken() {
         httpBind: getHttpBind(),
         httpPort,
         displayMode: getDisplayMode(),
-        remoteSshTarget: remoteSshTargetInput.value.trim(),
+        remoteSshTargets: collectSshTargets(),
         remoteCodexViaSsh: remoteCodexViaSshCheckbox.checked,
-        sshIdentityFile: sshIdentityFileInput.value.trim(),
+        originAliases: parseOriginAliases(),
         regenerateHttpToken: true,
       },
     });
@@ -556,7 +698,52 @@ async function refreshDiagnostics() {
     diagnostics?.codexMissingPaths,
     "无缺失路径。",
   );
+  renderDiagnosticsPaths(diagnostics);
   recentLog.textContent = diagnostics?.recentLog || "(空)";
+}
+
+function renderDiagnosticsPaths(diagnostics) {
+  diagnosticsPathsEl.replaceChildren();
+  if (!diagnostics) return;
+
+  const entries = [
+    ["配置目录", diagnostics.configDir],
+    ["运行时", diagnostics.runtimePath],
+    ["锁文件", diagnostics.lockPath],
+    ["日志文件", diagnostics.logPath],
+    ["Claude 设置", diagnostics.claudeSettingsPath],
+    ["钩子程序", diagnostics.hookBinaryPath],
+  ];
+
+  for (const [label, path] of entries) {
+    if (!path) continue;
+
+    const row = document.createElement("div");
+    row.className = "diagnostics-path-row";
+
+    const term = document.createElement("dt");
+    term.textContent = label;
+
+    const value = document.createElement("dd");
+    const link = document.createElement("button");
+    link.type = "button";
+    link.className = "path-link";
+    link.textContent = path;
+    link.title = `打开：${path}`;
+    link.addEventListener("click", () => openPathInExplorer(path));
+    value.appendChild(link);
+
+    row.append(term, value);
+    diagnosticsPathsEl.appendChild(row);
+  }
+}
+
+async function openPathInExplorer(path) {
+  try {
+    await invoke("open_path_in_explorer", { path });
+  } catch (error) {
+    setStatus(String(error), true);
+  }
 }
 
 async function copyDiagnostics() {
@@ -576,7 +763,7 @@ async function copyDiagnostics() {
 
 async function openAppLog() {
   try {
-    await invoke("open_app_log");
+    await invoke("open_config_dir");
   } catch (error) {
     setStatus(String(error), true);
   }
@@ -684,9 +871,12 @@ function setBusy(isBusy) {
   document.querySelectorAll('input[name="http-bind"]').forEach((input) => {
     input.disabled = isBusy;
   });
-  remoteSshTargetInput.disabled = isBusy;
+  originAliasesInput.disabled = isBusy;
   remoteCodexViaSshCheckbox.disabled = isBusy;
-  sshIdentityFileInput.disabled = isBusy;
+  addSshTargetButton.disabled = isBusy;
+  sshTargetsListEl.querySelectorAll("input, button").forEach((element) => {
+    element.disabled = isBusy;
+  });
   refreshRemoteButton.disabled = isBusy;
   copyInstallCommandButton.disabled = isBusy;
   copySshCommandButton.disabled = isBusy;

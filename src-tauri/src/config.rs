@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::PathBuf;
@@ -18,6 +19,55 @@ impl Default for DisplayMode {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
+pub struct SshRemoteTarget {
+    pub target: String,
+    #[serde(default)]
+    pub identity_file: Option<String>,
+    #[serde(default)]
+    pub label: Option<String>,
+}
+
+impl SshRemoteTarget {
+    pub fn normalized(&self) -> Option<Self> {
+        let target = self.target.trim().to_string();
+        if target.is_empty() {
+            return None;
+        }
+
+        let identity_file = self
+            .identity_file
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+
+        let label = self
+            .label
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+
+        Some(Self {
+            target,
+            identity_file,
+            label,
+        })
+    }
+}
+
+impl Default for SshRemoteTarget {
+    fn default() -> Self {
+        Self {
+            target: String::new(),
+            identity_file: None,
+            label: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
 pub struct AppConfig {
     pub window_x: i32,
     pub window_y: i32,
@@ -32,9 +82,27 @@ pub struct AppConfig {
     pub notify_on_done: bool,
     pub codex_session_paths: Vec<String>,
     pub display_mode: DisplayMode,
-    pub remote_ssh_target: Option<String>,
+    pub remote_ssh_targets: Vec<SshRemoteTarget>,
     pub remote_codex_via_ssh: bool,
-    pub ssh_identity_file: Option<String>,
+    pub origin_aliases: HashMap<String, String>,
+}
+
+impl AppConfig {
+    pub fn normalized_ssh_targets(&self) -> Vec<SshRemoteTarget> {
+        let mut targets = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+
+        for entry in &self.remote_ssh_targets {
+            let Some(normalized) = entry.normalized() else {
+                continue;
+            };
+            if seen.insert(normalized.target.clone()) {
+                targets.push(normalized);
+            }
+        }
+
+        targets
+    }
 }
 
 impl Default for AppConfig {
@@ -53,9 +121,9 @@ impl Default for AppConfig {
             codex_session_paths: Vec::new(),
             http_token: None,
             display_mode: DisplayMode::Parallel,
-            remote_ssh_target: None,
+            remote_ssh_targets: Vec::new(),
             remote_codex_via_ssh: true,
-            ssh_identity_file: None,
+            origin_aliases: HashMap::new(),
         }
     }
 }
@@ -130,7 +198,39 @@ pub fn load_app_config() -> AppConfig {
     };
 
     let content = content.strip_prefix('\u{feff}').unwrap_or(&content);
-    serde_json::from_str(content).unwrap_or_default()
+    let value: serde_json::Value =
+        serde_json::from_str(content).unwrap_or(serde_json::Value::Object(Default::default()));
+    let mut config: AppConfig = serde_json::from_value(value.clone()).unwrap_or_default();
+    migrate_legacy_ssh_target(&mut config, &value);
+    config
+}
+
+fn migrate_legacy_ssh_target(config: &mut AppConfig, value: &serde_json::Value) {
+    if !config.remote_ssh_targets.is_empty() {
+        return;
+    }
+
+    let Some(target) = value
+        .get("remote_ssh_target")
+        .and_then(|entry| entry.as_str())
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+    else {
+        return;
+    };
+
+    let identity_file = value
+        .get("ssh_identity_file")
+        .and_then(|entry| entry.as_str())
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(str::to_string);
+
+    config.remote_ssh_targets.push(SshRemoteTarget {
+        target: target.to_string(),
+        identity_file,
+        label: None,
+    });
 }
 
 pub fn save_app_config(config: &AppConfig) -> io::Result<()> {

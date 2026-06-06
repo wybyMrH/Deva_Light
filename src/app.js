@@ -435,7 +435,9 @@ function updateProjectLight(root, lightState) {
 
   const label = root.querySelector(".light-label");
   if (label) {
-    label.textContent = lightState.project_label || "unknown";
+    const projectName = lightState.project_label || "unknown";
+    label.textContent = projectName;
+    label.title = projectName;
   }
 
   // Update session badge
@@ -463,28 +465,37 @@ function updateProjectLight(root, lightState) {
   root.querySelector(".lamp.yellow")?.classList.toggle("on", lightState.status === "Waiting");
   root.querySelector(".lamp.green")?.classList.toggle("on", lightState.status === "Working");
 
-  updateOriginChip(root, origin);
+  updateOriginChip(root, lightState, origin);
   updateSessionChips(root, sessions);
-  updateLampIcons(root, lightState);
 }
 
-function updateOriginChip(root, origin) {
+function updateOriginChip(root, lightState, origin) {
   const chip = root.querySelector(".origin-chip");
   if (!chip) return;
 
   const key = String(origin || "local").toLowerCase();
-  const labels = {
-    local: "本",
-    wsl: "W",
-    ssh: "S",
-    remote: "远",
-  };
-  chip.textContent = labels[key] || "本";
-  chip.title = originLabel(origin);
-  chip.classList.toggle("hidden", root.classList.contains("traffic-light--app"));
+  const display =
+    lightState.origin_display ||
+    lightState.originDisplay ||
+    lightState.origin_detail ||
+    lightState.originDetail ||
+    originLabel(origin);
+  const detail = lightState.origin_detail || lightState.originDetail || originLabel(origin);
+  const originKey = lightState.origin_key || lightState.originKey || key;
+
+  chip.textContent = abbreviateOriginDisplay(display);
+  chip.title = `${originLabel(origin)} · ${detail}\n来源键：${originKey}`;
+  chip.classList.toggle("hidden", key === "local" || root.classList.contains("traffic-light--app"));
   chip.dataset.origin = key;
   chip.classList.remove("origin-local", "origin-wsl", "origin-ssh", "origin-remote");
   chip.classList.add(`origin-${key}`);
+}
+
+function abbreviateOriginDisplay(value) {
+  const text = String(value || "").trim();
+  if (!text) return "本";
+  if (text.length <= 8) return text;
+  return `${text.slice(0, 7)}…`;
 }
 
 function originLabel(origin) {
@@ -538,51 +549,7 @@ function updateSessionChips(root, sessions) {
 function createLamp(color, isOn) {
   const lamp = document.createElement("div");
   lamp.className = `lamp ${color}${isOn ? " on" : ""}`;
-  const icon = document.createElement("span");
-  icon.className = "lamp-icon";
-  icon.hidden = true;
-  lamp.appendChild(icon);
   return lamp;
-}
-
-function updateLampIcons(root, lightState) {
-  const status = lightState.status;
-  const sessions = lightState.sessions || [];
-  const activeColor =
-    status === "Working" ? "green" : status === "Waiting" ? "yellow" : "red";
-
-  for (const color of ["red", "yellow", "green"]) {
-    const lamp = root.querySelector(`.lamp.${color}`);
-    const icon = lamp?.querySelector(".lamp-icon");
-    if (!icon) continue;
-
-    if (color !== activeColor || !lamp.classList.contains("on")) {
-      icon.hidden = true;
-      icon.textContent = "";
-      icon.classList.remove("claude", "codex", "cursor");
-      continue;
-    }
-
-    const matching = sessions
-      .filter((session) => session.status === status)
-      .sort(
-        (left, right) =>
-          statusPriority(right.status) - statusPriority(left.status),
-      );
-    const primary = matching[0] || sessions[0];
-    if (!primary) {
-      icon.hidden = true;
-      icon.textContent = "";
-      icon.classList.remove("claude", "codex", "cursor");
-      continue;
-    }
-
-    const meta = toolMeta(primary.tool);
-    icon.hidden = false;
-    icon.textContent = meta.icon;
-    icon.classList.remove("claude", "codex", "cursor");
-    icon.classList.add(meta.chipClass);
-  }
 }
 
 function toolMeta(tool) {
@@ -797,48 +764,7 @@ async function copyProjectPath(projectId) {
 }
 
 async function showDiagnostics() {
-  const diagnostics = await safeInvoke("get_diagnostics");
-  if (!diagnostics) return;
-
-  const codexSessionPaths = Array.isArray(diagnostics.codex_sessions_paths)
-    ? diagnostics.codex_sessions_paths
-    : [diagnostics.codex_sessions_path].filter(Boolean);
-  const codexManualPaths = Array.isArray(diagnostics.codex_manual_paths)
-    ? diagnostics.codex_manual_paths
-    : [];
-  const codexMissingPaths = Array.isArray(diagnostics.codex_missing_paths)
-    ? diagnostics.codex_missing_paths
-    : [];
-
-  const text = [
-    "Deva Light 诊断信息",
-    "",
-    `配置目录: ${diagnostics.config_dir}`,
-    `运行时: ${diagnostics.runtime_path}`,
-    `锁文件: ${diagnostics.lock_path}`,
-    `日志: ${diagnostics.log_path}`,
-    `Claude 设置: ${diagnostics.claude_settings_path}`,
-    `钩子程序: ${diagnostics.hook_binary_path}`,
-    `Codex 会话: ${codexSessionPaths[0] || "(无)"}`,
-    ...codexSessionPaths.slice(1).map((path) => `  - ${path}`),
-    `Codex 自定义: ${codexManualPaths[0] || "(无)"}`,
-    ...codexManualPaths.slice(1).map((path) => `  - ${path}`),
-    `Codex 缺失: ${codexMissingPaths[0] || "(无)"}`,
-    ...codexMissingPaths.slice(1).map((path) => `  - ${path}`),
-    "",
-    `钩子已安装: ${diagnostics.hooks_installed}`,
-    `钩子程序存在: ${diagnostics.hook_binary_exists}`,
-    `运行时存在: ${diagnostics.runtime_exists}`,
-    `灯组数量: ${diagnostics.light_count}`,
-    "",
-    "最近日志:",
-    diagnostics.recent_log || "(空)",
-  ].join("\n");
-
-  if (navigator.clipboard) {
-    await navigator.clipboard.writeText(text);
-  }
-  alert(text);
+  await safeInvoke("open_settings", { panel: "advanced" });
 }
 
 async function loadUiConfig() {

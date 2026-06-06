@@ -49,7 +49,9 @@ body {
 
 .traffic-light {
   position: relative;
-  width: 60px;
+  width: max-content;
+  min-width: 72px;
+  max-width: 140px;
   min-height: 148px;
   display: flex;
   flex-direction: column;
@@ -112,16 +114,19 @@ body {
 
 .origin-chip {
   position: absolute;
-  top: 3px;
-  left: 3px;
-  min-width: 14px;
-  height: 14px;
-  padding: 0 3px;
+  top: 2px;
+  left: 2px;
+  max-width: 52px;
+  min-height: 14px;
+  padding: 1px 4px;
   border-radius: 4px;
-  font-size: 8px;
+  font-size: 7px;
   font-weight: 700;
-  line-height: 14px;
-  text-align: center;
+  line-height: 1.2;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: #f8fafc;
   background: rgba(15, 23, 42, 0.82);
   border: 1px solid rgba(148, 163, 184, 0.45);
@@ -284,16 +289,19 @@ body {
 }
 
 .light-label {
-  width: 60px;
+  min-width: 72px;
+  max-width: 132px;
   cursor: grab;
   color: rgba(255, 255, 255, 0.92);
   font-size: 10px;
   font-weight: 650;
-  line-height: 16px;
+  line-height: 1.25;
   text-align: center;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  word-break: break-word;
   background: var(--hit-test-bg);
   text-shadow:
     -1px -1px 0 rgba(0, 0, 0, 0.95),

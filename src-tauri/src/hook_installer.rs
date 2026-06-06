@@ -18,7 +18,7 @@ const HOOK_EVENTS: [(&str, &str); 8] = [
     ("SessionEnd", "session-end"),
 ];
 
-const CURSOR_HOOK_EVENTS: [&str; 15] = [
+const CURSOR_HOOK_EVENTS: [&str; 17] = [
     "sessionStart",
     "sessionEnd",
     "beforeSubmitPrompt",
@@ -34,6 +34,8 @@ const CURSOR_HOOK_EVENTS: [&str; 15] = [
     "subagentStop",
     "stop",
     "afterAgentResponse",
+    "afterAgentThought",
+    "afterFileEdit",
 ];
 
 pub fn get_claude_settings_path() -> PathBuf {

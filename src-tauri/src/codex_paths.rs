@@ -150,16 +150,13 @@ fn ssh_codex_sessions_dirs(config: &AppConfig) -> Vec<PathBuf> {
         return Vec::new();
     }
 
-    let Some(target) = config
-        .remote_ssh_target
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return Vec::new();
-    };
-
-    discover_codex_sessions_dir(target).into_iter().collect()
+    let mut dirs = Vec::new();
+    for target in config.normalized_ssh_targets() {
+        if let Some(path) = discover_codex_sessions_dir(&target.target) {
+            push_unique(&mut dirs, path);
+        }
+    }
+    dirs
 }
 
 fn ssh_codex_root_is_accessible(path: &Path) -> bool {

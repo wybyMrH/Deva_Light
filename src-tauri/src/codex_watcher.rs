@@ -795,9 +795,10 @@ mod tests {
         .unwrap();
 
         poll_rollout_root(&aggregator, &mut files, false, &root).unwrap();
-        let lights = aggregator.get_lights();
-        assert_eq!(lights[0].status, Status::Done);
-        assert_eq!(lights[0].last_tool_call.as_deref(), Some("apply_patch"));
+        assert!(
+            aggregator.get_lights().is_empty(),
+            "completed codex tasks should auto-hide from the lamp strip"
+        );
 
         let _ = fs::remove_dir_all(root);
         let _ = fs::remove_dir_all(project);
@@ -848,9 +849,7 @@ mod tests {
 
         poll_rollout_root(&aggregator, &mut files, false, &root).unwrap();
 
-        let lights = aggregator.get_lights();
-        assert_eq!(lights.len(), 1);
-        assert_eq!(lights[0].status, Status::Done);
+        assert!(aggregator.get_lights().is_empty());
 
         let _ = fs::remove_dir_all(root);
         let _ = fs::remove_dir_all(project);
@@ -1001,7 +1000,7 @@ mod tests {
                     "session_meta",
                     &format!(r#"{{"id":"s2","cwd":"{}"}}"#, json_path(&second_project))
                 ),
-                json_line("event_msg", r#"{"type":"task_complete"}"#)
+                json_line("event_msg", r#"{"type":"task_started"}"#)
             ),
         )
         .unwrap();
@@ -1114,9 +1113,7 @@ mod tests {
         let mut files = HashMap::new();
         poll_rollout_root(&aggregator, &mut files, false, &root).unwrap();
 
-        let lights = aggregator.get_lights();
-        assert_eq!(lights.len(), 1);
-        assert_eq!(lights[0].status, Status::Idle);
+        assert!(aggregator.get_lights().is_empty());
 
         fs::write(
             &rollout,
@@ -1132,7 +1129,9 @@ mod tests {
         .unwrap();
 
         poll_rollout_root(&aggregator, &mut files, false, &root).unwrap();
-        assert_eq!(aggregator.get_lights()[0].status, Status::Working);
+        let lights = aggregator.get_lights();
+        assert_eq!(lights.len(), 1);
+        assert_eq!(lights[0].status, Status::Working);
 
         let _ = fs::remove_dir_all(root);
         let _ = fs::remove_dir_all(project);

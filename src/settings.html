@@ -24,7 +24,7 @@
           <button type="button" class="nav-item" data-panel="about">关于</button>
           <button type="button" class="nav-item" data-panel="advanced">高级</button>
         </nav>
-        <p class="config-path" id="config-path" title="配置文件路径"></p>
+        <button type="button" class="config-path" id="config-path" title="打开配置目录"></button>
       </aside>
 
       <div class="main">
@@ -43,7 +43,7 @@
               <label class="row toggle-row">
                 <span>
                   <strong>始终置顶</strong>
-                  <small>红绿灯浮在所有窗口之上</small>
+                  <small>仅在有 Working / Waiting 任务时置顶，空闲时自动取消</small>
                 </span>
                 <input id="always-on-top" type="checkbox" class="switch" checked />
               </label>
@@ -149,20 +149,20 @@
                 </span>
                 <input id="remote-codex-via-ssh" type="checkbox" class="switch" checked />
               </label>
-              <div class="field-grid ssh-fields">
-                <label class="field">
-                  <span>SSH 目标</span>
-                  <input id="remote-ssh-target" type="text" placeholder="user@192.168.1.10" />
-                </label>
-                <label class="field">
-                  <span>私钥路径（可选）</span>
-                  <input id="ssh-identity-file" type="text" placeholder="~/.ssh/id_ed25519" />
-                </label>
-              </div>
+              <div id="ssh-targets-list" class="ssh-target-list" aria-live="polite"></div>
               <div class="action-row">
-                <button id="test-ssh" type="button" class="accent">测试 SSH 连接</button>
-                <output id="ssh-test-status" class="status-badge" aria-live="polite"></output>
+                <button id="add-ssh-target" type="button">添加 SSH 主机</button>
               </div>
+              <p class="field-hint">可添加多台远程主机，保存后均可监控、编辑或删除。别名会显示在灯组左上角。</p>
+              <label class="field wide">
+                <span>WSL / 其他来源别名</span>
+                <textarea
+                  id="origin-aliases"
+                  rows="4"
+                  placeholder="wsl:Ubuntu=家里 WSL&#10;wsl:Debian=测试机&#10;local=本机"
+                ></textarea>
+                <small>每行一条，格式为 <code>来源键=别名</code>。WSL 键为 <code>wsl:发行版名</code>，SSH 键为 <code>ssh:user@host</code>（也可在上方 SSH 主机里填别名）。</small>
+              </label>
               <div class="stat wide">
                 <span>远程 Codex 路径</span>
                 <output id="ssh-codex-path" class="mono">未配置</output>
@@ -260,8 +260,9 @@
               <div class="action-row">
                 <button id="refresh-diagnostics" type="button">刷新诊断</button>
                 <button id="copy-diagnostics" type="button">复制诊断</button>
-                <button id="open-app-log" type="button">打开日志文件</button>
+                <button id="open-app-log" type="button">打开日志目录</button>
               </div>
+              <dl id="diagnostics-paths" class="diagnostics-paths"></dl>
               <pre id="recent-log">(加载中)</pre>
             </article>
             <article class="card danger-card">

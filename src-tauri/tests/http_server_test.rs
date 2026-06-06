@@ -89,3 +89,4 @@ fn cursor_event_resolves_cursor_tool() {
     assert_eq!(event.resolve_tool(), deva_light::types::Tool::Cursor);
     assert!(event.should_track());
 }
+

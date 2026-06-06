@@ -23,9 +23,8 @@ fn update_session_status_reaggregates_light() {
     agg.add_session("s1".to_string(), Tool::ClaudeCode, &cwd, Status::Working);
     agg.update_session_status("s1", Status::Done);
 
-    let lights = agg.get_lights();
-    assert_eq!(lights[0].status, Status::Done);
-    assert_eq!(agg.session_status("s1"), Some(Status::Done));
+    assert!(agg.get_lights().is_empty());
+    assert_eq!(agg.session_status("s1"), None);
 }
 
 #[test]
@@ -62,9 +61,7 @@ fn confirm_waiting_session_keeps_tracking() {
     agg.add_session("s1".to_string(), Tool::ClaudeCode, &cwd, Status::Waiting);
     agg.confirm_session("s1");
 
-    let lights = agg.get_lights();
-    assert_eq!(lights.len(), 1);
-    assert_eq!(lights[0].status, Status::Idle);
+    assert!(agg.get_lights().is_empty());
     assert_eq!(agg.session_status("s1"), Some(Status::Idle));
 }
 
@@ -129,5 +126,20 @@ fn preserves_first_seen_project_order() {
         .map(|light| light.project_label.clone())
         .collect();
 
-    assert_eq!(labels, vec!["本地 · first", "本地 · second"]);
+    assert_eq!(labels, vec!["second"]);
+
+    agg.add_session(
+        "s3".to_string(),
+        Tool::ClaudeCode,
+        &PathBuf::from("/home/user/third"),
+        Status::Working,
+    );
+
+    let labels: Vec<_> = agg
+        .get_lights()
+        .iter()
+        .map(|light| light.project_label.clone())
+        .collect();
+
+    assert_eq!(labels, vec!["second", "third"]);
 }

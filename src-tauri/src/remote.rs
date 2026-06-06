@@ -17,6 +17,16 @@ pub struct RemoteSetupInfo {
     pub curl_install_command: String,
     pub ssh_install_command: Option<String>,
     pub ssh_codex_path: Option<String>,
+    pub ssh_targets: Vec<SshTargetSetupInfo>,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshTargetSetupInfo {
+    pub target: String,
+    pub identity_file: Option<String>,
+    pub ssh_install_command: Option<String>,
+    pub ssh_codex_path: Option<String>,
 }
 
 pub fn build_remote_setup_info() -> Result<RemoteSetupInfo, String> {
@@ -35,20 +45,32 @@ pub fn build_remote_setup_info() -> Result<RemoteSetupInfo, String> {
 
     let install_command = build_install_command(&event_url, token.as_deref());
     let curl_install_command = build_curl_install_command(&event_url, token.as_deref());
-    let ssh_install_command = config
-        .remote_ssh_target
-        .as_deref()
-        .map(|target| build_ssh_install_command(target, &curl_install_command));
-    let ssh_codex_path = config
-        .remote_codex_via_ssh
-        .then(|| {
-            config
-                .remote_ssh_target
-                .as_deref()
-                .and_then(discover_codex_sessions_dir)
+    let ssh_targets: Vec<SshTargetSetupInfo> = config
+        .normalized_ssh_targets()
+        .into_iter()
+        .map(|entry| {
+            let ssh_install_command =
+                Some(build_ssh_install_command(&entry.target, &curl_install_command));
+            let ssh_codex_path = config
+                .remote_codex_via_ssh
+                .then(|| discover_codex_sessions_dir(&entry.target))
+                .flatten()
+                .map(|path| path.to_string_lossy().to_string());
+
+            SshTargetSetupInfo {
+                target: entry.target,
+                identity_file: entry.identity_file,
+                ssh_install_command,
+                ssh_codex_path,
+            }
         })
-        .flatten()
-        .map(|path| path.to_string_lossy().to_string());
+        .collect();
+    let ssh_install_command = ssh_targets
+        .first()
+        .and_then(|entry| entry.ssh_install_command.clone());
+    let ssh_codex_path = ssh_targets
+        .first()
+        .and_then(|entry| entry.ssh_codex_path.clone());
 
     Ok(RemoteSetupInfo {
         http_bind: config.http_bind.clone(),
@@ -61,6 +83,7 @@ pub fn build_remote_setup_info() -> Result<RemoteSetupInfo, String> {
         curl_install_command,
         ssh_install_command,
         ssh_codex_path,
+        ssh_targets,
     })
 }
 

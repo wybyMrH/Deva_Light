@@ -107,12 +107,22 @@ body {
 
 .config-path {
   margin: auto 8px 0;
+  padding: 6px 8px;
+  border: none;
+  background: transparent;
   color: var(--text-muted);
   font-size: 10px;
   line-height: 1.4;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  text-align: left;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  white-space: normal;
+  word-break: break-all;
+}
+
+.config-path:hover {
+  color: #dbeafe;
 }
 
 .main {
@@ -644,6 +654,80 @@ button.wide {
 
 .inline-status.error {
   color: #fca5a5;
+}
+
+.ssh-target-list {
+  display: grid;
+  gap: 12px;
+}
+
+.ssh-target-row {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.ssh-target-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.ssh-row-status {
+  min-height: 18px;
+}
+
+.field-hint {
+  margin: 8px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.diagnostics-paths {
+  margin: 12px 0 0;
+  display: grid;
+  gap: 8px;
+}
+
+.diagnostics-path-row {
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  gap: 10px;
+  align-items: start;
+}
+
+.diagnostics-path-row dt {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.diagnostics-path-row dd {
+  margin: 0;
+}
+
+.path-link {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: #93c5fd;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.path-link:hover {
+  color: #dbeafe;
 }
 
 #recent-log {

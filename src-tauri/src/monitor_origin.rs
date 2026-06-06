@@ -1,6 +1,7 @@
 use crate::codex_paths::is_wsl_unc_path;
-use crate::ssh_remote::is_ssh_virtual_path;
+use crate::ssh_remote::{is_ssh_virtual_path, parse_ssh_virtual_path};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -82,8 +83,81 @@ pub fn compose_light_id(logical_project_id: &str, origin: MonitorOrigin) -> Stri
     format!("{logical_project_id}@@{}", origin.as_key())
 }
 
-pub fn format_light_label(origin: MonitorOrigin, project_label: &str) -> String {
-    format!("{} · {project_label}", origin.label_prefix())
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OriginIdentity {
+    pub origin: MonitorOrigin,
+    pub key: String,
+    pub detail: String,
+}
+
+pub fn resolve_origin_identity(cwd: &Path, context_path: Option<&Path>) -> OriginIdentity {
+    if let Some(context) = context_path {
+        if let Some((target, _)) = parse_ssh_virtual_path(context) {
+            return OriginIdentity {
+                origin: MonitorOrigin::Ssh,
+                key: format!("ssh:{target}"),
+                detail: target,
+            };
+        }
+        if let Some(distro) = wsl_distro_from_path(context) {
+            return OriginIdentity {
+                origin: MonitorOrigin::Wsl,
+                key: format!("wsl:{distro}"),
+                detail: distro,
+            };
+        }
+    }
+
+    if let Some(distro) = wsl_distro_from_path(cwd) {
+        return OriginIdentity {
+            origin: MonitorOrigin::Wsl,
+            key: format!("wsl:{distro}"),
+            detail: distro,
+        };
+    }
+
+    let origin = detect_monitor_origin_from_cwd(cwd);
+    OriginIdentity {
+        key: origin.as_key().to_string(),
+        detail: origin.label_prefix().to_string(),
+        origin,
+    }
+}
+
+pub fn resolve_origin_display(
+    identity: &OriginIdentity,
+    aliases: &HashMap<String, String>,
+) -> String {
+    if let Some(alias) = aliases.get(&identity.key).map(|value| value.trim()).filter(|value| !value.is_empty()) {
+        return alias.to_string();
+    }
+
+    match identity.origin {
+        MonitorOrigin::Local => "本地".to_string(),
+        MonitorOrigin::Wsl | MonitorOrigin::Ssh => identity.detail.clone(),
+        MonitorOrigin::Remote => "远程".to_string(),
+    }
+}
+
+fn wsl_distro_from_path(path: &Path) -> Option<String> {
+    let normalized = path.to_string_lossy().replace('\\', "/");
+    let lower = normalized.to_ascii_lowercase();
+
+    if lower.starts_with("//wsl.localhost/") || lower.starts_with("//wsl$/") {
+        let segments: Vec<&str> = normalized.split('/').filter(|part| !part.is_empty()).collect();
+        if segments.len() >= 3 {
+            return Some(segments[2].to_string());
+        }
+    }
+
+    if lower.starts_with("wsl://") {
+        let segments: Vec<&str> = normalized.split('/').filter(|part| !part.is_empty()).collect();
+        if segments.len() >= 2 {
+            return Some(segments[1].to_string());
+        }
+    }
+
+    None
 }
 
 #[cfg(test)]

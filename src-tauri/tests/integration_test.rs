@@ -28,10 +28,7 @@ fn hook_http_server_drives_session_lifecycle() {
         ),
     );
 
-    eventually(|| {
-        let lights = aggregator.get_lights();
-        lights.len() == 1 && lights[0].status == Status::Idle
-    });
+    eventually(|| aggregator.session_status("s1") == Some(Status::Idle));
 
     post_event(
         port,
@@ -47,22 +44,7 @@ fn hook_http_server_drives_session_lifecycle() {
 
     post_event(port, r#"{"event_type":"stop","session_id":"s1"}"#);
 
-    eventually(|| {
-        let lights = aggregator.get_lights();
-        lights.len() == 1 && lights[0].status == Status::Done
-    });
-
-    post_event(port, r#"{"event_type":"notification","session_id":"s1"}"#);
-    post_event(port, r#"{"event_type":"post-tool-use","session_id":"s1"}"#);
-    post_event(
-        port,
-        r#"{"event_type":"permission-request","session_id":"s1"}"#,
-    );
-
-    eventually(|| {
-        let lights = aggregator.get_lights();
-        lights.len() == 1 && lights[0].status == Status::Done
-    });
+    eventually(|| aggregator.get_lights().is_empty());
 
     post_event(port, r#"{"event_type":"prompt-submit","session_id":"s1"}"#);
 

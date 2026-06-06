@@ -20,6 +20,7 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, Position, Size, State};
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Diagnostics {
     pub config_dir: String,
     pub runtime_path: String,
@@ -51,10 +52,25 @@ pub struct AppConfigView {
     pub notify_on_done: bool,
     pub codex_manual_paths: Vec<String>,
     pub display_mode: String,
-    pub remote_ssh_target: Option<String>,
+    pub remote_ssh_targets: Vec<SshRemoteTargetView>,
     pub remote_codex_via_ssh: bool,
-    pub ssh_identity_file: Option<String>,
+    pub origin_aliases: Vec<OriginAliasView>,
     pub http_token: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct OriginAliasView {
+    pub key: String,
+    pub alias: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct SshRemoteTargetView {
+    pub target: String,
+    pub identity_file: Option<String>,
+    pub label: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -75,9 +91,9 @@ pub struct AppConfigUpdate {
     pub notify_on_done: Option<bool>,
     pub codex_manual_paths: Option<Vec<String>>,
     pub display_mode: Option<String>,
-    pub remote_ssh_target: Option<String>,
+    pub remote_ssh_targets: Option<Vec<SshRemoteTargetView>>,
     pub remote_codex_via_ssh: Option<bool>,
-    pub ssh_identity_file: Option<String>,
+    pub origin_aliases: Option<Vec<OriginAliasView>>,
     pub regenerate_http_token: Option<bool>,
 }
 
@@ -148,6 +164,27 @@ pub fn open_app_log() -> Result<(), String> {
 #[tauri::command]
 pub fn get_app_config() -> AppConfigView {
     let config = load_app_config();
+    let remote_ssh_targets = config
+        .normalized_ssh_targets()
+        .into_iter()
+        .map(|entry| SshRemoteTargetView {
+            target: entry.target.clone(),
+            identity_file: entry.identity_file.clone(),
+            label: entry
+                .label
+                .clone()
+                .or_else(|| config.origin_aliases.get(&format!("ssh:{}", entry.target)).cloned()),
+        })
+        .collect();
+    let origin_aliases = config
+        .origin_aliases
+        .iter()
+        .map(|(key, alias)| OriginAliasView {
+            key: key.clone(),
+            alias: alias.clone(),
+        })
+        .collect();
+
     AppConfigView {
         config_path: get_config_path().to_string_lossy().to_string(),
         http_bind: config.http_bind,
@@ -159,10 +196,10 @@ pub fn get_app_config() -> AppConfigView {
         notify_on_done: config.notify_on_done,
         codex_manual_paths: config.codex_session_paths,
         display_mode: display_mode_to_string(&config.display_mode),
-        remote_ssh_target: config.remote_ssh_target.clone(),
+        remote_ssh_targets,
         remote_codex_via_ssh: config.remote_codex_via_ssh,
-        ssh_identity_file: config.ssh_identity_file.clone(),
-        http_token: config.http_token.clone(),
+        origin_aliases,
+        http_token: config.http_token,
     }
 }
 
@@ -206,24 +243,43 @@ pub fn save_app_config_command(
     if let Some(display_mode) = update.display_mode.as_deref() {
         config.display_mode = parse_display_mode(display_mode)?;
     }
-    if let Some(remote_ssh_target) = update.remote_ssh_target {
-        let trimmed = remote_ssh_target.trim().to_string();
-        config.remote_ssh_target = if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed)
-        };
+    if let Some(remote_ssh_targets) = update.remote_ssh_targets {
+        config.remote_ssh_targets = remote_ssh_targets
+            .into_iter()
+            .filter_map(|entry| {
+                deva_light::config::SshRemoteTarget {
+                    target: entry.target,
+                    identity_file: entry.identity_file,
+                    label: entry.label,
+                }
+                .normalized()
+            })
+            .collect();
+
+        for entry in &config.remote_ssh_targets {
+            if let Some(label) = entry.label.as_deref().filter(|value| !value.is_empty()) {
+                config
+                    .origin_aliases
+                    .insert(format!("ssh:{}", entry.target), label.to_string());
+            }
+        }
+    }
+    if let Some(origin_aliases) = update.origin_aliases {
+        config.origin_aliases = origin_aliases
+            .into_iter()
+            .filter_map(|entry| {
+                let key = entry.key.trim().to_string();
+                let alias = entry.alias.trim().to_string();
+                if key.is_empty() || alias.is_empty() {
+                    None
+                } else {
+                    Some((key, alias))
+                }
+            })
+            .collect();
     }
     if let Some(remote_codex_via_ssh) = update.remote_codex_via_ssh {
         config.remote_codex_via_ssh = remote_codex_via_ssh;
-    }
-    if let Some(ssh_identity_file) = update.ssh_identity_file {
-        let trimmed = ssh_identity_file.trim().to_string();
-        config.ssh_identity_file = if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed)
-        };
     }
     if update.regenerate_http_token == Some(true) {
         config.http_token = Some(deva_light::config::generate_http_token());
@@ -273,13 +329,18 @@ pub fn save_app_config_command(
 }
 
 #[tauri::command]
-pub fn set_always_on_top(app: AppHandle, enabled: bool) -> Result<(), String> {
+pub fn set_always_on_top(
+    app: AppHandle,
+    aggregator: State<Arc<StateAggregator>>,
+    enabled: bool,
+) -> Result<(), String> {
     let window = app
         .get_webview_window("main")
         .ok_or_else(|| "main window not available".to_string())?;
 
+    let pin_window = enabled && aggregator.has_active_lights();
     window
-        .set_always_on_top(enabled)
+        .set_always_on_top(pin_window)
         .map_err(|error| error.to_string())?;
 
     let mut config = load_app_config();
@@ -403,13 +464,51 @@ pub fn test_ssh_connection(
     let config = load_app_config();
     let target = ssh_target
         .filter(|value| !value.trim().is_empty())
-        .or(config.remote_ssh_target)
+        .or_else(|| {
+            config
+                .normalized_ssh_targets()
+                .first()
+                .map(|entry| entry.target.clone())
+        })
         .unwrap_or_default();
     let identity = ssh_identity_file
         .filter(|value| !value.trim().is_empty())
-        .or(config.ssh_identity_file);
+        .or_else(|| {
+            config
+                .normalized_ssh_targets()
+                .first()
+                .and_then(|entry| entry.identity_file.clone())
+        });
 
     deva_light::ssh_remote::test_ssh_connection(&target, identity.as_deref())
+}
+
+#[tauri::command]
+pub fn hide_settings(app: AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window("settings")
+        .ok_or_else(|| "settings window is not available".to_string())?;
+    window.hide().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn open_config_dir() -> Result<(), String> {
+    open_path(&get_config_dir().to_string_lossy())
+}
+
+#[tauri::command]
+pub fn open_path_in_explorer(path: String) -> Result<(), String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("路径为空".to_string());
+    }
+
+    let target = PathBuf::from(trimmed);
+    if target.is_file() {
+        return open_path(&target.to_string_lossy());
+    }
+
+    open_path(&target.to_string_lossy())
 }
 
 #[tauri::command]

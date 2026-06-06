@@ -67,6 +67,9 @@ fn main() {
             ipc::test_ssh_connection,
             ipc::persist_window_position,
             ipc::open_settings,
+            ipc::hide_settings,
+            ipc::open_config_dir,
+            ipc::open_path_in_explorer,
             ipc::resize_main_window,
             ipc::check_hooks,
             ipc::check_cursor_hooks,
@@ -104,11 +107,14 @@ fn main() {
                 tauri::PhysicalPosition::new(app_config.window_x, app_config.window_y),
             ));
 
-            // Apply always_on_top setting
-            let _ = window.set_always_on_top(app_config.always_on_top);
+            // Pin only while active tasks exist; preference is applied in on_change.
+            let _ = window.set_always_on_top(false);
             log_info(
                 "app",
-                format!("always on top set to {}", app_config.always_on_top),
+                format!(
+                    "always on top preference saved as {}",
+                    app_config.always_on_top
+                ),
             );
 
             if let Some(settings_window) = app.get_webview_window("settings") {
@@ -131,6 +137,9 @@ fn main() {
                 let _ = emit_window.emit("state-changed", &lights);
 
                 let config = load_app_config();
+                let pin_window = config.always_on_top && emit_aggregator.has_active_lights();
+                let _ = emit_window.set_always_on_top(pin_window);
+
                 if !config.notifications_enabled {
                     return;
                 }

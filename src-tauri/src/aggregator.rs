@@ -1,5 +1,6 @@
+use crate::config::load_app_config;
 use crate::monitor_origin::{
-    compose_light_id, detect_monitor_origin, format_light_label,
+    compose_light_id, resolve_origin_display, resolve_origin_identity,
 };
 use crate::project::identify_project;
 use crate::types::{LightState, SessionRef, Status, Tool};
@@ -39,9 +40,9 @@ impl StateAggregator {
         context_path: Option<&Path>,
     ) {
         let (logical_project_id, project_label) = identify_project(cwd);
-        let origin = detect_monitor_origin(cwd, context_path);
+        let identity = resolve_origin_identity(cwd, context_path);
+        let origin = identity.origin;
         let light_id = compose_light_id(&logical_project_id, origin);
-        let display_label = format_light_label(origin, &project_label);
         let workspace_path = cwd.to_string_lossy().to_string();
 
         {
@@ -57,8 +58,10 @@ impl StateAggregator {
                 LightState::new(
                     light_id.clone(),
                     logical_project_id.clone(),
-                    display_label,
+                    project_label.clone(),
                     origin,
+                    identity.key.clone(),
+                    identity.detail.clone(),
                 )
             });
 
@@ -78,7 +81,8 @@ impl StateAggregator {
             light.last_event_at = Instant::now();
             light.aggregate_status();
 
-            state.session_to_light.insert(session_id, light_id);
+            state.session_to_light.insert(session_id, light_id.clone());
+            purge_completed_light(&mut state, &light_id);
         }
 
         self.notify_change();
@@ -110,6 +114,7 @@ impl StateAggregator {
                     session.status = new_status;
                     light.last_event_at = Instant::now();
                     light.aggregate_status();
+                    purge_completed_light(&mut state, &light_id);
                     changed = true;
                 }
             }
@@ -159,6 +164,8 @@ impl StateAggregator {
 
             if should_remove {
                 remove_light_by_id(&mut state, &light_id);
+            } else {
+                purge_completed_light(&mut state, &light_id);
             }
             changed = true;
         }
@@ -283,12 +290,33 @@ impl StateAggregator {
 
     pub fn get_lights(&self) -> Vec<LightState> {
         let state = self.state.read().expect("aggregator state lock poisoned");
+        let aliases = load_app_config().origin_aliases;
 
         state
             .light_order
             .iter()
             .filter_map(|light_id| state.lights.get(light_id).cloned())
+            .filter(|light| light.is_active())
+            .map(|mut light| {
+                light.origin_display = Some(resolve_origin_display(
+                    &crate::monitor_origin::OriginIdentity {
+                        origin: light.monitor_origin,
+                        key: light.origin_key.clone(),
+                        detail: light.origin_detail.clone(),
+                    },
+                    &aliases,
+                ));
+                light
+            })
             .collect()
+    }
+
+    pub fn has_active_lights(&self) -> bool {
+        let state = self.state.read().expect("aggregator state lock poisoned");
+        state
+            .lights
+            .values()
+            .any(|light| light.is_active())
     }
 
     pub fn set_task_name(&self, session_id: &str, task_name: String) {
@@ -401,6 +429,20 @@ fn summarize_task_name(task_name: String) -> String {
     }
 }
 
+fn purge_completed_light(state: &mut AggregatorState, light_id: &str) {
+    let should_remove = state.lights.get(light_id).is_some_and(|light| {
+        !light.sessions.is_empty()
+            && light
+                .sessions
+                .iter()
+                .all(|session| session.status == Status::Done)
+    });
+
+    if should_remove {
+        remove_light_by_id(state, light_id);
+    }
+}
+
 fn remove_light_by_id(state: &mut AggregatorState, light_id: &str) -> bool {
     let mut removed = false;
 
@@ -423,6 +465,25 @@ mod tests {
     use super::*;
     use crate::monitor_origin::MonitorOrigin;
     use crate::types::Tool;
+
+    #[test]
+    fn hides_lights_without_active_sessions() {
+        let agg = StateAggregator::new();
+
+        agg.add_session(
+            "idle-session".to_string(),
+            Tool::ClaudeCode,
+            Path::new(r"C:\demo"),
+            Status::Idle,
+        );
+        assert!(agg.get_lights().is_empty());
+
+        agg.update_session_status("idle-session", Status::Working);
+        assert_eq!(agg.get_lights().len(), 1);
+
+        agg.update_session_status("idle-session", Status::Done);
+        assert!(agg.get_lights().is_empty());
+    }
 
     #[test]
     fn splits_same_logical_project_by_origin() {

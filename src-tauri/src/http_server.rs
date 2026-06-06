@@ -427,7 +427,14 @@ fn apply_hook_event(aggregator: &StateAggregator, event: HookEvent) {
             }
 
             if let Some(status) = HookEvent::event_type_to_status(&event.event_type) {
-                aggregator.update_session_status(&event.session_id, status);
+                if should_apply_status_transition(
+                    aggregator.session_status(&event.session_id),
+                    status,
+                    &event.event_type,
+                    event.source.as_deref(),
+                ) {
+                    aggregator.update_session_status(&event.session_id, status);
+                }
             }
 
             if let Some(task_hint) = event.task_hint.as_deref().filter(|value| !value.is_empty()) {
@@ -475,6 +482,37 @@ fn ensure_session_exists(aggregator: &StateAggregator, event: &HookEvent, tool: 
             event.session_id, event.event_type
         ),
     );
+}
+
+fn should_apply_status_transition(
+    current: Option<Status>,
+    next: Status,
+    event_type: &str,
+    source: Option<&str>,
+) -> bool {
+    let Some(current) = current else {
+        return true;
+    };
+
+    if current != Status::Waiting || next != Status::Working {
+        return true;
+    }
+
+    if source == Some("cursor") {
+        return matches!(
+            event_type,
+            "after-shell-execution"
+                | "after-mcp-execution"
+                | "after-file-edit"
+                | "stop"
+                | "session-end"
+        );
+    }
+
+    matches!(
+        event_type,
+        "post-tool-use" | "after-shell-execution" | "after-mcp-execution" | "stop"
+    )
 }
 
 fn should_ignore_late_event_after_done(aggregator: &StateAggregator, event: &HookEvent) -> bool {
@@ -559,5 +597,21 @@ mod tests {
     fn accepts_bearer_token() {
         let headers = "POST /events HTTP/1.1\r\nAuthorization: Bearer secret\r\n";
         assert!(authorize_request(headers, Some("secret")));
+    }
+
+    #[test]
+    fn cursor_waiting_persists_across_agent_response() {
+        assert!(!should_apply_status_transition(
+            Some(Status::Waiting),
+            Status::Working,
+            "after-agent-response",
+            Some("cursor"),
+        ));
+        assert!(should_apply_status_transition(
+            Some(Status::Waiting),
+            Status::Working,
+            "after-shell-execution",
+            Some("cursor"),
+        ));
     }
 }
