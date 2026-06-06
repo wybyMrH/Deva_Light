@@ -108,7 +108,21 @@ pub fn get_lights(aggregator: State<Arc<StateAggregator>>) -> Vec<LightState> {
 }
 
 #[tauri::command]
-pub fn open_project(project_id: String) -> Result<(), String> {
+pub fn open_project(
+    project_id: String,
+    aggregator: State<Arc<StateAggregator>>,
+) -> Result<(), String> {
+    if let Some(path) = aggregator.workspace_path(&project_id) {
+        return open_path(&path);
+    }
+
+    if let Some((logical, _)) = project_id.rsplit_once("@@") {
+        if logical.starts_with("git:") {
+            return Err("Git 项目请在对应环境（本地/WSL/远程）中打开工作区".to_string());
+        }
+        return open_path(logical);
+    }
+
     open_path(&project_id)
 }
 
@@ -521,8 +535,18 @@ pub fn check_hooks() -> bool {
 }
 
 #[tauri::command]
+pub fn check_cursor_hooks() -> bool {
+    deva_light::hook_installer::check_cursor_hooks_installed()
+}
+
+#[tauri::command]
 pub fn install_hooks_command() -> Result<(), String> {
     install_hooks().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn install_cursor_hooks_command() -> Result<(), String> {
+    deva_light::hook_installer::install_cursor_hooks().map_err(|error| error.to_string())
 }
 
 #[tauri::command]

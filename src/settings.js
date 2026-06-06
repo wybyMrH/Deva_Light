@@ -20,6 +20,7 @@ const recentLog = document.getElementById("recent-log");
 const saveButton = document.getElementById("save");
 const closeButton = document.getElementById("close");
 const installIntegrationButton = document.getElementById("install-integration");
+const installCursorIntegrationButton = document.getElementById("install-cursor-integration");
 const removeIntegrationButton = document.getElementById("remove-integration");
 const prepareUninstallButton = document.getElementById("prepare-uninstall");
 const refreshDiagnosticsButton = document.getElementById("refresh-diagnostics");
@@ -75,6 +76,7 @@ notificationsEnabledCheckbox.addEventListener("change", syncNotificationOptions)
 saveButton.addEventListener("click", saveSettings);
 closeButton.addEventListener("click", () => currentWindow?.close());
 installIntegrationButton.addEventListener("click", installIntegration);
+installCursorIntegrationButton?.addEventListener("click", installCursorIntegration);
 removeIntegrationButton.addEventListener("click", removeIntegration);
 prepareUninstallButton.addEventListener("click", prepareUninstall);
 refreshDiagnosticsButton.addEventListener("click", refreshDiagnostics);
@@ -401,16 +403,28 @@ async function installIntegration() {
   }
 }
 
+async function installCursorIntegration() {
+  setBusy(true);
+  try {
+    await invoke("install_cursor_hooks_command");
+    setStatus("Cursor 集成已安装。请重启 Cursor 以生效。");
+  } catch (error) {
+    setStatus(String(error), true);
+  } finally {
+    setBusy(false);
+  }
+}
+
 async function removeIntegration() {
   const confirmed = confirm(
-    "确定要从 Claude Code 设置中移除 Deva Light 钩子并删除辅助程序吗？",
+    "确定要移除 Claude Code 与 Cursor 的 Deva Light 钩子并删除辅助程序吗？",
   );
   if (!confirmed) return;
 
   setBusy(true);
   try {
     await invoke("remove_hooks_command");
-    setStatus("Claude 集成已移除。请重启 Claude Code 以生效。");
+    setStatus("全部集成已移除。请重启 Claude Code / Cursor 以生效。");
   } catch (error) {
     setStatus(String(error), true);
   } finally {
@@ -650,6 +664,9 @@ function setBusy(isBusy) {
   saveButton.disabled = isBusy;
   closeButton.disabled = isBusy;
   installIntegrationButton.disabled = isBusy;
+  if (installCursorIntegrationButton) {
+    installCursorIntegrationButton.disabled = isBusy;
+  }
   removeIntegrationButton.disabled = isBusy;
   prepareUninstallButton.disabled = isBusy;
   refreshDiagnosticsButton.disabled = isBusy;

@@ -18,11 +18,36 @@ const HOOK_EVENTS: [(&str, &str); 8] = [
     ("SessionEnd", "session-end"),
 ];
 
+const CURSOR_HOOK_EVENTS: [&str; 15] = [
+    "sessionStart",
+    "sessionEnd",
+    "beforeSubmitPrompt",
+    "preToolUse",
+    "postToolUse",
+    "postToolUseFailure",
+    "beforeShellExecution",
+    "afterShellExecution",
+    "beforeMCPExecution",
+    "afterMCPExecution",
+    "beforeReadFile",
+    "subagentStart",
+    "subagentStop",
+    "stop",
+    "afterAgentResponse",
+];
+
 pub fn get_claude_settings_path() -> PathBuf {
     home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".claude")
         .join("settings.json")
+}
+
+pub fn get_cursor_hooks_path() -> PathBuf {
+    home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".cursor")
+        .join("hooks.json")
 }
 
 pub fn get_hook_binary_path() -> PathBuf {
@@ -81,6 +106,86 @@ pub fn install_hook_binary_from_resource(resource_dir: &Path) -> Result<bool, st
     Ok(true)
 }
 
+pub fn merge_cursor_hooks(mut existing: Value, hook_path: &Path) -> Result<Value, String> {
+    if !existing.is_object() {
+        return Err("hooks root must be a JSON object".to_string());
+    }
+
+    existing["version"] = json!(1);
+    if existing.get("hooks").is_none() {
+        existing["hooks"] = json!({});
+    }
+
+    let hooks = existing
+        .get_mut("hooks")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| "hooks field must be a JSON object".to_string())?;
+
+    let command = quote_command(hook_path);
+
+    for event_name in CURSOR_HOOK_EVENTS {
+        let event_hooks = hooks
+            .entry(event_name.to_string())
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
+            .ok_or_else(|| format!("hooks.{event_name} field must be an array"))?;
+
+        remove_cursor_ai_light_hook_entries(event_hooks);
+        event_hooks.push(json!({ "command": command.clone() }));
+    }
+
+    Ok(existing)
+}
+
+pub fn remove_cursor_ai_light_hooks(mut existing: Value) -> Result<Value, String> {
+    if !existing.is_object() {
+        return Err("hooks root must be a JSON object".to_string());
+    }
+
+    let Some(hooks) = existing.get_mut("hooks") else {
+        return Ok(existing);
+    };
+
+    let hooks = hooks
+        .as_object_mut()
+        .ok_or_else(|| "hooks field must be a JSON object".to_string())?;
+    let event_names: Vec<_> = hooks.keys().cloned().collect();
+
+    for event_name in event_names {
+        let Some(event_hooks) = hooks.get_mut(&event_name).and_then(Value::as_array_mut) else {
+            continue;
+        };
+
+        remove_cursor_ai_light_hook_entries(event_hooks);
+
+        if event_hooks.is_empty() {
+            hooks.remove(&event_name);
+        }
+    }
+
+    Ok(existing)
+}
+
+fn remove_cursor_ai_light_hook_entries(event_hooks: &mut Vec<Value>) {
+    event_hooks.retain(|entry| !cursor_entry_contains_ai_light_hook(entry));
+}
+
+fn cursor_entry_contains_ai_light_hook(entry: &Value) -> bool {
+    entry
+        .get("command")
+        .and_then(Value::as_str)
+        .is_some_and(|command| command.contains("deva-light-hook"))
+}
+
+fn quote_command(path: &Path) -> String {
+    let command = path.to_string_lossy();
+    if command.contains(' ') {
+        format!("\"{command}\"")
+    } else {
+        command.to_string()
+    }
+}
+
 pub fn merge_hooks(mut existing: Value, hook_path: &Path) -> Result<Value, String> {
     if !existing.is_object() {
         return Err("settings root must be a JSON object".to_string());
@@ -119,6 +224,15 @@ pub fn merge_hooks(mut existing: Value, hook_path: &Path) -> Result<Value, Strin
 }
 
 pub fn install_hooks() -> Result<(), Box<dyn std::error::Error>> {
+    install_claude_hooks()?;
+
+    #[cfg(target_os = "windows")]
+    install_wsl_hooks()?;
+
+    Ok(())
+}
+
+pub fn install_claude_hooks() -> Result<(), Box<dyn std::error::Error>> {
     let settings_path = get_claude_settings_path();
     let hook_path = get_hook_binary_path();
 
@@ -145,10 +259,36 @@ pub fn install_hooks() -> Result<(), Box<dyn std::error::Error>> {
     let merged = merge_hooks(existing, &hook_path)?;
     fs::write(settings_path, serde_json::to_string_pretty(&merged)?)?;
     log_info("hook_installer", "installed Claude hooks");
+    Ok(())
+}
 
-    #[cfg(target_os = "windows")]
-    install_wsl_hooks()?;
+pub fn install_cursor_hooks() -> Result<(), Box<dyn std::error::Error>> {
+    let hooks_path = get_cursor_hooks_path();
+    let hook_path = get_hook_binary_path();
 
+    if !hook_path.exists() {
+        return Err(format!("hook binary not found: {}", hook_path.display()).into());
+    }
+
+    set_hook_binary_executable(&hook_path)?;
+
+    let existing = if hooks_path.exists() {
+        read_settings_json(&hooks_path)?
+    } else {
+        json!({})
+    };
+
+    if let Some(parent) = hooks_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    if hooks_path.exists() {
+        fs::copy(&hooks_path, hooks_path.with_extension("json.bak"))?;
+    }
+
+    let merged = merge_cursor_hooks(existing, &hook_path)?;
+    fs::write(hooks_path, serde_json::to_string_pretty(&merged)?)?;
+    log_info("hook_installer", "installed Cursor hooks");
     Ok(())
 }
 
@@ -163,6 +303,19 @@ pub fn refresh_wsl_hooks() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 pub fn remove_hooks() -> Result<(), Box<dyn std::error::Error>> {
+    remove_claude_hooks()?;
+    remove_cursor_hooks()?;
+
+    let hook_path = get_hook_binary_path();
+    if hook_path.exists() {
+        fs::remove_file(hook_path)?;
+    }
+
+    log_info("hook_installer", "removed Claude/Cursor hooks and helper binary");
+    Ok(())
+}
+
+pub fn remove_claude_hooks() -> Result<(), Box<dyn std::error::Error>> {
     let settings_path = get_claude_settings_path();
     if settings_path.exists() {
         let existing = read_settings_json(&settings_path)?;
@@ -178,13 +331,22 @@ pub fn remove_hooks() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(target_os = "windows")]
     remove_wsl_hooks()?;
 
-    let hook_path = get_hook_binary_path();
-    if hook_path.exists() {
-        fs::remove_file(hook_path)?;
+    Ok(())
+}
+
+pub fn remove_cursor_hooks() -> Result<(), Box<dyn std::error::Error>> {
+    let hooks_path = get_cursor_hooks_path();
+    if !hooks_path.exists() {
+        return Ok(());
     }
 
-    log_info("hook_installer", "removed Claude hooks and helper binary");
-
+    let existing = read_settings_json(&hooks_path)?;
+    let cleaned = remove_cursor_ai_light_hooks(existing)?;
+    fs::copy(
+        &hooks_path,
+        hooks_path.with_extension("json.ai-light-remove.bak"),
+    )?;
+    fs::write(hooks_path, serde_json::to_string_pretty(&cleaned)?)?;
     Ok(())
 }
 
@@ -307,7 +469,33 @@ fn remove_wsl_hooks() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+pub fn check_cursor_hooks_installed() -> bool {
+    let Ok(content) = fs::read_to_string(get_cursor_hooks_path()) else {
+        return false;
+    };
+
+    let content = content.strip_prefix('\u{feff}').unwrap_or(&content);
+    let Ok(settings) = serde_json::from_str::<Value>(content) else {
+        return false;
+    };
+
+    let Some(hooks) = settings.get("hooks").and_then(Value::as_object) else {
+        return false;
+    };
+
+    CURSOR_HOOK_EVENTS.iter().all(|event_name| {
+        hooks
+            .get(*event_name)
+            .and_then(Value::as_array)
+            .is_some_and(|entries| entries.iter().any(cursor_entry_contains_ai_light_hook))
+    })
+}
+
 pub fn check_hooks_installed() -> bool {
+    check_claude_hooks_installed()
+}
+
+pub fn check_claude_hooks_installed() -> bool {
     let Ok(content) = fs::read_to_string(get_claude_settings_path()) else {
         return false;
     };

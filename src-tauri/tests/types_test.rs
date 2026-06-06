@@ -1,3 +1,4 @@
+use deva_light::monitor_origin::MonitorOrigin;
 use deva_light::types::{LightState, SessionRef, Status, Tool};
 use std::time::Instant;
 
@@ -19,7 +20,12 @@ fn test_status_max() {
 
 #[test]
 fn test_light_state_aggregation() {
-    let mut light = LightState::new("/home/user/project".to_string(), "project".to_string());
+    let mut light = LightState::new(
+        "local@@local".to_string(),
+        "/home/user/project".to_string(),
+        "project".to_string(),
+        MonitorOrigin::Local,
+    );
 
     // No sessions = Idle
     light.aggregate_status();
@@ -32,7 +38,7 @@ fn test_light_state_aggregation() {
         status: Status::Working,
         started_at: Instant::now(),
         task_name: None,
-        source: None,
+        monitor_origin: Some(MonitorOrigin::Local),
         process_id: None,
     });
     light.aggregate_status();
@@ -45,7 +51,7 @@ fn test_light_state_aggregation() {
         status: Status::Waiting,
         started_at: Instant::now(),
         task_name: None,
-        source: None,
+        monitor_origin: Some(MonitorOrigin::Local),
         process_id: None,
     });
     light.aggregate_status();

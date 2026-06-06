@@ -421,6 +421,7 @@ fn remove_light_by_id(state: &mut AggregatorState, light_id: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::monitor_origin::MonitorOrigin;
     use crate::types::Tool;
 
     #[test]

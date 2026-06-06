@@ -64,18 +64,13 @@ export function updateDrawer(drawerRoot, sessions, projectLabel = "") {
   for (const session of sorted) {
     content.appendChild(createSessionRow(session));
   }
+}
 
-  const shouldShow = sessions.length > 1;
-  const wasHidden = drawerRoot.hidden;
-  drawerRoot.hidden = !shouldShow;
-  panel.hidden = !shouldShow;
-
-  if (shouldShow && wasHidden) {
-    notifyVisibilityChange();
-  } else if (!shouldShow && !wasHidden) {
-    currentDrawerProjectId = null;
-    notifyVisibilityChange();
-  }
+/**
+ * Update drawer content without changing visibility.
+ */
+export function syncSessionDrawer(drawerRoot, sessions, projectLabel = "") {
+  updateDrawer(drawerRoot, sessions, projectLabel);
 }
 
 /**
@@ -100,7 +95,9 @@ function createSessionRow(session) {
 
   const tool = document.createElement("span");
   tool.className = "session-tool";
-  tool.textContent = session.tool === "ClaudeCode" ? "Claude" : "Codex";
+  const origin = session.monitor_origin || session.monitorOrigin;
+  const originLabel = origin ? `${formatOrigin(origin)} · ` : "";
+  tool.textContent = `${originLabel}${formatToolLabel(session.tool)}`;
 
   info.append(name, tool);
 
@@ -118,6 +115,30 @@ function createSessionRow(session) {
 
   row.append(indicator, info);
   return row;
+}
+
+function formatToolLabel(tool) {
+  switch (String(tool)) {
+    case "Codex":
+      return "Codex";
+    case "Cursor":
+      return "Cursor";
+    default:
+      return "Claude";
+  }
+}
+
+function formatOrigin(origin) {
+  switch (String(origin).toLowerCase()) {
+    case "wsl":
+      return "WSL";
+    case "ssh":
+      return "SSH";
+    case "remote":
+      return "远程";
+    default:
+      return "本地";
+  }
 }
 
 function shortenSessionId(sessionId) {
@@ -191,7 +212,10 @@ function createProjectRow(project) {
 
   const tool = document.createElement("span");
   tool.className = "session-tool";
-  tool.textContent = `${project.sessions?.length || 0} 个会话`;
+  const origin = project.monitor_origin || project.monitorOrigin;
+  tool.textContent = origin
+    ? `${formatOrigin(origin)} · ${project.sessions?.length || 0} 个会话`
+    : `${project.sessions?.length || 0} 个会话`;
 
   info.append(name, tool);
   row.append(indicator, info);

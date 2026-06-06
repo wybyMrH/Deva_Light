@@ -1,14 +1,11 @@
 import {
   createDrawer,
-  updateDrawer,
   updateProjectDrawer,
-  showDrawer,
   showProjectDrawer,
   hideDrawer,
   getBadgeText,
   shouldShowBadge,
   isDrawerOpen,
-  getCurrentDrawerProjectId,
   getDrawerMode,
 } from "./drawer.js";
 
@@ -20,13 +17,15 @@ const currentWindow =
 
 let lights = [];
 let displayMode = "parallel";
+let compactFocusProjectId = null;
 const lightElements = new Map();
 let lastWindowSize = { width: 0, height: 0 };
 let resizeFrame = 0;
-const WINDOW_GUTTER_X = 8;
-const WINDOW_GUTTER_Y = 26;
-const WINDOW_PAINT_OVERFLOW_X_PER_LIGHT = 16;
+const WINDOW_GUTTER_X = 36;
+const WINDOW_GUTTER_Y = 28;
 const MENU_EDGE_GUTTER = 12;
+const DRAWER_EXTRA_GUTTER = 24;
+const DRAG_THRESHOLD_PX = 5;
 
 const container = document.getElementById("lights-container");
 const menu = document.getElementById("menu");
@@ -43,7 +42,12 @@ tauriEvent?.listen("state-changed", (event) => {
 });
 
 tauriEvent?.listen("config-changed", (event) => {
-  displayMode = event.payload?.displayMode || "parallel";
+  const nextMode = event.payload?.displayMode || "parallel";
+  if (nextMode !== displayMode) {
+    displayMode = nextMode;
+    compactFocusProjectId = null;
+    hideDrawer();
+  }
   render();
 });
 
@@ -52,14 +56,9 @@ window.addEventListener("drawer-project-selected", (event) => {
   const light = lights.find((entry) => entry.project_id === projectId);
   if (!light) return;
 
-  if (light.sessions.length > 1) {
-    showDrawer(projectId, drawer, light.project_label || light.project_id);
-    updateDrawer(drawer, light.sessions, light.project_label || light.project_id);
-    scheduleWindowResize();
-    return;
-  }
-
+  compactFocusProjectId = projectId;
   hideDrawer();
+  render();
 });
 
 window.addEventListener("drawer-visibility-changed", () => {
@@ -92,10 +91,74 @@ document.addEventListener("keydown", (event) => {
 
 let isDragging = false;
 let dragStart = null;
+let suppressClick = false;
+let pendingDrag = null;
 
 document.addEventListener("pointerdown", async (event) => {
   if (!shouldStartDrag(event)) return;
 
+  // Standby: native drag on pointerdown. Project lights: defer so clicks still work.
+  if (event.target.closest(".traffic-light--app")) {
+    await beginWindowDrag(event);
+    return;
+  }
+
+  pendingDrag = {
+    pointerId: event.pointerId,
+    startX: event.screenX,
+    startY: event.screenY,
+  };
+  try {
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  } catch {}
+});
+
+document.addEventListener("pointermove", async (event) => {
+  if (pendingDrag && event.pointerId === pendingDrag.pointerId) {
+    const dx = event.screenX - pendingDrag.startX;
+    const dy = event.screenY - pendingDrag.startY;
+    if (Math.hypot(dx, dy) >= DRAG_THRESHOLD_PX) {
+      pendingDrag = null;
+      suppressClick = true;
+      await beginWindowDrag(event);
+    }
+    return;
+  }
+
+  if (!isDragging || !dragStart || !currentWindow) return;
+
+  const dx = event.screenX - dragStart.mouseX;
+  const dy = event.screenY - dragStart.mouseY;
+
+  try {
+    const PhysicalPosition = window.__TAURI__?.dpi?.PhysicalPosition;
+    if (PhysicalPosition) {
+      await currentWindow.setPosition(
+        new PhysicalPosition(dragStart.winX + dx, dragStart.winY + dy),
+      );
+    }
+  } catch {}
+});
+
+document.addEventListener("pointerup", async (event) => {
+  if (pendingDrag && event.pointerId === pendingDrag.pointerId) {
+    pendingDrag = null;
+  }
+
+  if (isDragging) {
+    try {
+      const pos = await currentWindow?.outerPosition();
+      if (pos) {
+        await safeInvoke("persist_window_position", { x: pos.x, y: pos.y });
+      }
+    } catch {}
+  }
+
+  isDragging = false;
+  dragStart = null;
+});
+
+async function beginWindowDrag(event) {
   try {
     await currentWindow?.startDragging?.();
     return;
@@ -112,37 +175,7 @@ document.addEventListener("pointerdown", async (event) => {
   try {
     event.target.setPointerCapture(event.pointerId);
   } catch {}
-});
-
-document.addEventListener("pointermove", async (event) => {
-  if (!isDragging || !dragStart || !currentWindow) return;
-
-  const dx = event.screenX - dragStart.mouseX;
-  const dy = event.screenY - dragStart.mouseY;
-
-  try {
-    const PhysicalPosition = window.__TAURI__?.dpi?.PhysicalPosition;
-    if (PhysicalPosition) {
-      await currentWindow.setPosition(
-        new PhysicalPosition(dragStart.winX + dx, dragStart.winY + dy),
-      );
-    }
-  } catch {}
-});
-
-document.addEventListener("pointerup", async () => {
-  if (isDragging && currentWindow) {
-    try {
-      const pos = await currentWindow.outerPosition();
-      if (pos) {
-        await safeInvoke("persist_window_position", { x: pos.x, y: pos.y });
-      }
-    } catch {}
-  }
-
-  isDragging = false;
-  dragStart = null;
-});
+}
 
 function statusPriority(status) {
   return ({ Waiting: 3, Working: 2, Done: 1, Idle: 0 }[status] ?? 0);
@@ -150,13 +183,38 @@ function statusPriority(status) {
 
 function lightsForDisplay() {
   if (displayMode === "compact" && lights.length > 1) {
-    const primary = [...lights].sort(
+    const sorted = [...lights].sort(
       (left, right) => statusPriority(right.status) - statusPriority(left.status),
-    )[0];
-    return [primary];
+    );
+    if (
+      !compactFocusProjectId ||
+      !lights.some((light) => light.project_id === compactFocusProjectId)
+    ) {
+      compactFocusProjectId = sorted[0].project_id;
+    }
+    const focused =
+      lights.find((light) => light.project_id === compactFocusProjectId) || sorted[0];
+    return [focused];
   }
 
   return lights;
+}
+
+function cycleCompactProject() {
+  if (displayMode !== "compact" || lights.length <= 1) {
+    return;
+  }
+
+  const sorted = [...lights].sort(
+    (left, right) => statusPriority(right.status) - statusPriority(left.status),
+  );
+  const currentIndex = sorted.findIndex(
+    (light) => light.project_id === compactFocusProjectId,
+  );
+  const nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % sorted.length;
+  compactFocusProjectId = sorted[nextIndex].project_id;
+  hideDrawer();
+  render();
 }
 
 function render() {
@@ -182,31 +240,30 @@ function render() {
     }
   }
 
-  const activeDrawerProjectId = getCurrentDrawerProjectId();
   for (const [projectId, element] of lightElements) {
     element.classList.toggle(
       "is-drawer-active",
       isDrawerOpen() &&
-        ((getDrawerMode() === "projects" && displayMode === "compact") ||
-          projectId === activeDrawerProjectId),
+        getDrawerMode() === "projects" &&
+        displayMode === "compact" &&
+        projectId === compactFocusProjectId,
     );
   }
 
-  if (isDrawerOpen() && getDrawerMode() === "projects" && displayMode === "compact") {
+  if (
+    displayMode === "parallel" &&
+    isDrawerOpen() &&
+    getDrawerMode() !== "projects"
+  ) {
+    hideDrawer();
+  }
+
+  if (
+    isDrawerOpen() &&
+    getDrawerMode() === "projects" &&
+    displayMode === "compact"
+  ) {
     updateProjectDrawer(drawer, lights);
-  } else if (isDrawerOpen() && activeDrawerProjectId) {
-    const activeLight = lights.find(
-      (light) => light.project_id === activeDrawerProjectId,
-    );
-    if (activeLight && activeLight.sessions.length > 1) {
-      updateDrawer(
-        drawer,
-        activeLight.sessions,
-        activeLight.project_label || activeLight.project_id,
-      );
-    } else {
-      hideDrawer();
-    }
   }
 
   scheduleWindowResize();
@@ -241,6 +298,8 @@ function createProjectLight(lightState) {
     title: tooltipFor(lightState),
   });
   root.dataset.projectId = lightState.project_id;
+  const origin = lightState.monitor_origin || lightState.monitorOrigin || "local";
+  root.classList.add(`origin-${String(origin).toLowerCase()}`);
 
   // Add session badge
   const badge = document.createElement("div");
@@ -248,6 +307,11 @@ function createProjectLight(lightState) {
   root.appendChild(badge);
 
   root.addEventListener("click", (event) => {
+    if (suppressClick) {
+      suppressClick = false;
+      return;
+    }
+
     const projectId = root.dataset.projectId;
     const status = root.dataset.status;
     const sessions = root.lightState?.sessions || [];
@@ -255,24 +319,53 @@ function createProjectLight(lightState) {
     if (displayMode === "compact" && lights.length > 1) {
       event.stopPropagation();
       hideMenu();
-      showProjectDrawer(drawer, lights);
-      scheduleWindowResize();
+
+      if (event.target.closest(".session-badge")) {
+        if (isDrawerOpen() && getDrawerMode() === "projects") {
+          hideDrawer();
+        } else {
+          showProjectDrawer(drawer, lights);
+        }
+        scheduleWindowResize();
+        return;
+      }
+
+      if (
+        sessions.length === 1 &&
+        (status === "Waiting" || status === "Done") &&
+        event.target.closest(".lamp.on")
+      ) {
+        safeInvoke("confirm_light", { projectId });
+        return;
+      }
+
+      cycleCompactProject();
       return;
     }
 
-    // If multiple sessions, show drawer instead of confirming
-    if (sessions.length > 1) {
+    if (displayMode !== "compact" && sessions.length > 1) {
       event.stopPropagation();
       hideMenu();
-      const projectLabel =
-        root.lightState?.project_label || root.lightState?.project_id || "";
-      showDrawer(projectId, drawer, projectLabel);
-      updateDrawer(drawer, sessions, projectLabel);
-      scheduleWindowResize();
+
+      const chip = event.target.closest(".tool-chip");
+      if (chip) {
+        const chipIndex = [...root.querySelectorAll(".tool-chip")].indexOf(chip);
+        const session = sessions[chipIndex];
+        if (
+          session &&
+          (session.status === "Waiting" || session.status === "Done")
+        ) {
+          safeInvoke("confirm_session", { sessionId: session.session_id });
+        }
+        return;
+      }
+
+      if (status === "Waiting" || status === "Done") {
+        safeInvoke("confirm_light", { projectId });
+      }
       return;
     }
 
-    // Single session: confirm on actionable status
     if (status === "Waiting" || status === "Done") {
       safeInvoke("confirm_light", { projectId });
     }
@@ -306,9 +399,17 @@ function createLightElement({ label, status, title, standby = false }) {
   const housing = document.createElement("div");
   housing.className = "light-housing";
 
+  const originChip = document.createElement("span");
+  originChip.className = "origin-chip hidden";
+  housing.appendChild(originChip);
+
   housing.appendChild(createLamp("red", status === "Done" || status === "Idle"));
   housing.appendChild(createLamp("yellow", status === "Waiting"));
   housing.appendChild(createLamp("green", status === "Working"));
+
+  const sessionChips = document.createElement("div");
+  sessionChips.className = "session-chips";
+  housing.appendChild(sessionChips);
 
   const labelEl = document.createElement("div");
   labelEl.className = "light-label";
@@ -323,6 +424,10 @@ function updateProjectLight(root, lightState) {
   root.dataset.projectId = lightState.project_id;
   root.dataset.status = lightState.status;
   root.title = tooltipFor(lightState);
+
+  const origin = lightState.monitor_origin || lightState.monitorOrigin || "local";
+  root.classList.remove("origin-local", "origin-wsl", "origin-ssh", "origin-remote");
+  root.classList.add(`origin-${String(origin).toLowerCase()}`);
   root.classList.toggle(
     "is-actionable",
     lightState.status === "Waiting" || lightState.status === "Done",
@@ -339,9 +444,11 @@ function updateProjectLight(root, lightState) {
   if (badge) {
     if (displayMode === "compact" && lights.length > 1) {
       badge.textContent = `${lights.length}`;
+      badge.title = "点击打开项目列表";
       badge.classList.remove("hidden");
     } else if (shouldShowBadge(sessions)) {
       badge.textContent = getBadgeText(sessions);
+      badge.title = "多会话";
       badge.classList.remove("hidden");
     } else {
       badge.classList.add("hidden");
@@ -355,19 +462,147 @@ function updateProjectLight(root, lightState) {
   root.querySelector(".lamp.red")?.classList.toggle("on", lightState.status === "Done" || lightState.status === "Idle");
   root.querySelector(".lamp.yellow")?.classList.toggle("on", lightState.status === "Waiting");
   root.querySelector(".lamp.green")?.classList.toggle("on", lightState.status === "Working");
+
+  updateOriginChip(root, origin);
+  updateSessionChips(root, sessions);
+  updateLampIcons(root, lightState);
+}
+
+function updateOriginChip(root, origin) {
+  const chip = root.querySelector(".origin-chip");
+  if (!chip) return;
+
+  const key = String(origin || "local").toLowerCase();
+  const labels = {
+    local: "本",
+    wsl: "W",
+    ssh: "S",
+    remote: "远",
+  };
+  chip.textContent = labels[key] || "本";
+  chip.title = originLabel(origin);
+  chip.classList.toggle("hidden", root.classList.contains("traffic-light--app"));
+  chip.dataset.origin = key;
+  chip.classList.remove("origin-local", "origin-wsl", "origin-ssh", "origin-remote");
+  chip.classList.add(`origin-${key}`);
+}
+
+function originLabel(origin) {
+  switch (String(origin || "local").toLowerCase()) {
+    case "wsl":
+      return "WSL";
+    case "ssh":
+      return "SSH";
+    case "remote":
+      return "远程";
+    default:
+      return "本地";
+  }
+}
+
+function updateSessionChips(root, sessions) {
+  const container = root.querySelector(".session-chips");
+  if (!container) return;
+
+  container.replaceChildren();
+  if (root.classList.contains("traffic-light--app") || sessions.length <= 1) {
+    container.hidden = true;
+    container.classList.remove("is-interactive");
+    return;
+  }
+
+  const isInteractive = displayMode === "parallel" && sessions.length > 1;
+  container.classList.toggle("is-interactive", isInteractive);
+  container.hidden = false;
+
+  sessions.forEach((session) => {
+    const chip = document.createElement("span");
+    const meta = toolMeta(session.tool);
+    chip.className = `tool-chip ${meta.chipClass}`;
+    chip.title = `${meta.label} · ${session.task_name || session.session_id}`;
+    chip.textContent = meta.icon;
+
+    if (isInteractive) {
+      chip.addEventListener("click", (event) => {
+        event.stopPropagation();
+        if (session.status === "Waiting" || session.status === "Done") {
+          safeInvoke("confirm_session", { sessionId: session.session_id });
+        }
+      });
+    }
+
+    container.appendChild(chip);
+  });
 }
 
 function createLamp(color, isOn) {
   const lamp = document.createElement("div");
   lamp.className = `lamp ${color}${isOn ? " on" : ""}`;
+  const icon = document.createElement("span");
+  icon.className = "lamp-icon";
+  icon.hidden = true;
+  lamp.appendChild(icon);
   return lamp;
 }
 
+function updateLampIcons(root, lightState) {
+  const status = lightState.status;
+  const sessions = lightState.sessions || [];
+  const activeColor =
+    status === "Working" ? "green" : status === "Waiting" ? "yellow" : "red";
+
+  for (const color of ["red", "yellow", "green"]) {
+    const lamp = root.querySelector(`.lamp.${color}`);
+    const icon = lamp?.querySelector(".lamp-icon");
+    if (!icon) continue;
+
+    if (color !== activeColor || !lamp.classList.contains("on")) {
+      icon.hidden = true;
+      icon.textContent = "";
+      icon.classList.remove("claude", "codex", "cursor");
+      continue;
+    }
+
+    const matching = sessions
+      .filter((session) => session.status === status)
+      .sort(
+        (left, right) =>
+          statusPriority(right.status) - statusPriority(left.status),
+      );
+    const primary = matching[0] || sessions[0];
+    if (!primary) {
+      icon.hidden = true;
+      icon.textContent = "";
+      icon.classList.remove("claude", "codex", "cursor");
+      continue;
+    }
+
+    const meta = toolMeta(primary.tool);
+    icon.hidden = false;
+    icon.textContent = meta.icon;
+    icon.classList.remove("claude", "codex", "cursor");
+    icon.classList.add(meta.chipClass);
+  }
+}
+
+function toolMeta(tool) {
+  switch (String(tool)) {
+    case "Codex":
+      return { label: "Codex", chipClass: "codex", icon: "◇" };
+    case "Cursor":
+      return { label: "Cursor", chipClass: "cursor", icon: "●" };
+    default:
+      return { label: "Claude", chipClass: "claude", icon: "◆" };
+  }
+}
+
 function tooltipFor(lightState) {
+  const origin = lightState.monitor_origin || lightState.monitorOrigin;
   const parts = [
     lightState.project_label || lightState.project_id,
+    origin ? `来源: ${origin}` : null,
     lightState.status || "Idle",
-  ];
+  ].filter(Boolean);
 
   if (lightState.last_tool_call) {
     parts.push(lightState.last_tool_call);
@@ -417,7 +652,9 @@ function scheduleWindowResize() {
     cancelAnimationFrame(resizeFrame);
   }
 
-  resizeFrame = requestAnimationFrame(resizeWindowToContent);
+  resizeFrame = requestAnimationFrame(() => {
+    requestAnimationFrame(resizeWindowToContent);
+  });
 }
 
 async function resizeWindowToContent() {
@@ -425,18 +662,11 @@ async function resizeWindowToContent() {
   if (!currentWindow) return;
 
   const bodyStyle = getComputedStyle(document.body);
-  const paddingX =
-    parseFloat(bodyStyle.paddingLeft) + parseFloat(bodyStyle.paddingRight);
   const paddingY =
     parseFloat(bodyStyle.paddingTop) + parseFloat(bodyStyle.paddingBottom);
 
   const contentSize = measureVisibleContent();
-  let width = Math.ceil(
-    contentSize.width +
-      paddingX +
-      WINDOW_GUTTER_X +
-      contentSize.count * WINDOW_PAINT_OVERFLOW_X_PER_LIGHT,
-  );
+  let width = Math.ceil(measureContentRightEdge() + WINDOW_GUTTER_X);
   let height = Math.ceil(contentSize.height + paddingY + WINDOW_GUTTER_Y);
 
   if (!menu.hidden) {
@@ -448,8 +678,13 @@ async function resizeWindowToContent() {
   if (!drawer.hidden) {
     const drawerPanel = drawer.querySelector(".session-drawer");
     const drawerRect = (drawerPanel || drawer).getBoundingClientRect();
-    width = Math.ceil(drawerRect.right + MENU_EDGE_GUTTER);
-    height = Math.max(height, Math.ceil(drawerRect.bottom + MENU_EDGE_GUTTER));
+    width = Math.ceil(
+      drawerRect.right + MENU_EDGE_GUTTER + DRAWER_EXTRA_GUTTER,
+    );
+    height = Math.max(
+      height,
+      Math.ceil(drawerRect.bottom + MENU_EDGE_GUTTER),
+    );
   }
 
   width = Math.max(72, width);
@@ -476,6 +711,16 @@ async function resizeWindowToContent() {
   } catch (error) {
     console.debug("resizeWindowToContent fallback", error);
   }
+}
+
+function measureContentRightEdge() {
+  let right = 0;
+  for (const child of document.body.children) {
+    if (child.hidden || child.id === "menu") continue;
+    const rect = child.getBoundingClientRect();
+    if (rect.width > 0) right = Math.max(right, rect.right);
+  }
+  return right;
 }
 
 function measureVisibleContent() {
@@ -512,8 +757,19 @@ function shouldStartDrag(event) {
     return true;
   }
 
-  // Project lights: drag from label only; lamps handle click actions.
-  return Boolean(event.target.closest(".light-label"));
+  // Project lights: drag from the whole widget; badge/chips keep click-only behavior.
+  if (event.target.closest(".session-badge")) {
+    return false;
+  }
+
+  if (
+    displayMode === "parallel" &&
+    event.target.closest(".tool-chip")
+  ) {
+    return false;
+  }
+
+  return Boolean(event.target.closest(".traffic-light:not(.traffic-light--app)"));
 }
 
 async function safeInvoke(command, payload) {

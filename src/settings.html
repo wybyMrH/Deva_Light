@@ -54,8 +54,9 @@
                 </span>
                 <div class="segmented" role="group" aria-label="显示模式">
                   <label><input type="radio" name="display-mode" value="parallel" checked /><span>并行灯组</span></label>
-                  <label><input type="radio" name="display-mode" value="compact" /><span>收纳抽屉</span></label>
+                  <label><input type="radio" name="display-mode" value="compact" /><span>收纳单灯</span></label>
                 </div>
+                <p class="field-hint">并行：多项目横排，会话显示为灯上小图标。收纳：只显示一个灯，点击切换项目，角标打开项目列表。</p>
               </div>
             </article>
 
@@ -197,14 +198,25 @@
             </article>
           </section>
 
-          <!-- Claude 集成 -->
-          <section class="panel" id="panel-integration" data-title="Claude 集成" data-desc="安装或移除 Claude Code 钩子">
+          <!-- 编辑器集成 -->
+          <section class="panel" id="panel-integration" data-title="编辑器集成" data-desc="安装 Claude Code / Cursor 钩子">
             <article class="card">
               <h2>Claude Code 钩子</h2>
-              <p class="card-intro">将 Deva Light hook 写入 Claude Code 配置，安装后需重启 Claude Code。</p>
+              <p class="card-intro">写入 <code>~/.claude/settings.json</code>，安装后需重启 Claude Code。</p>
               <div class="action-row vertical">
                 <button id="install-integration" type="button" class="accent wide">安装 Claude 集成</button>
-                <button id="remove-integration" type="button" class="danger wide">移除 Claude 集成</button>
+              </div>
+            </article>
+            <article class="card">
+              <h2>Cursor 钩子</h2>
+              <p class="card-intro">
+                写入 <code>~/.cursor/hooks.json</code>。黄灯依赖 <code>beforeShellExecution</code> /
+                <code>beforeMCPExecution</code> 事件（Cursor 无 Claude 的 PermissionRequest）。
+                安装后重启 Cursor。
+              </p>
+              <div class="action-row vertical">
+                <button id="install-cursor-integration" type="button" class="accent wide">安装 Cursor 集成</button>
+                <button id="remove-integration" type="button" class="danger wide">移除全部集成</button>
               </div>
             </article>
           </section>

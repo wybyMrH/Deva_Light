@@ -69,7 +69,9 @@ fn main() {
             ipc::open_settings,
             ipc::resize_main_window,
             ipc::check_hooks,
+            ipc::check_cursor_hooks,
             ipc::install_hooks_command,
+            ipc::install_cursor_hooks_command,
             ipc::remove_hooks_command,
             ipc::preview_hook_config_command,
             ipc::quit_app

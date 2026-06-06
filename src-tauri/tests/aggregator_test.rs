@@ -129,5 +129,5 @@ fn preserves_first_seen_project_order() {
         .map(|light| light.project_label.clone())
         .collect();
 
-    assert_eq!(labels, vec!["first", "second"]);
+    assert_eq!(labels, vec!["本地 · first", "本地 · second"]);
 }

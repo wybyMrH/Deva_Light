@@ -17,15 +17,10 @@ struct HookEvent {
     cwd: Option<String>,
     tool_call: Option<String>,
     task_hint: Option<String>,
+    source: Option<String>,
 }
 
 fn main() {
-    let Some(raw_event_type) = env::args().nth(1) else {
-        append_log("ignored: missing event type argument");
-        return;
-    };
-    let event_type = normalize_event_type(&raw_event_type);
-
     let payload = match read_stdin_payload() {
         Ok(payload) => payload,
         Err(error) => {
@@ -33,6 +28,13 @@ fn main() {
             return;
         }
     };
+
+    let raw_event_type = env::args().nth(1);
+    let event_type = resolve_event_type(raw_event_type.as_deref(), &payload);
+    if event_type == "unknown" {
+        append_log("ignored: could not resolve event type");
+        return;
+    }
 
     let Some((target_url, target_source)) = resolve_event_url() else {
         append_log(format!(
@@ -42,23 +44,25 @@ fn main() {
         return;
     };
 
+    let source = resolve_source(&payload);
+    let session_id = resolve_session_id(&payload, &event_type);
     let event = HookEvent {
         event_type,
-        session_id: extract_string(&payload, &["session_id", "sessionId"])
-            .unwrap_or_else(|| "unknown".to_string()),
-        cwd: extract_string(&payload, &["cwd"]),
-        tool_call: extract_string(&payload, &["tool_name", "tool", "toolName"]),
-        task_hint: extract_string(&payload, &["prompt", "user_prompt", "message"]),
+        session_id,
+        cwd: resolve_cwd(&payload),
+        tool_call: resolve_tool_call(&payload),
+        task_hint: resolve_task_hint(&payload),
+        source: Some(source.to_string()),
     };
 
     match post_event(&target_url, &event) {
         Ok(status) => append_log(format!(
-            "sent: event={} session={} target={} source={} status={}",
-            event.event_type, event.session_id, target_url, target_source, status
+            "sent: event={} session={} source={} target={} via={} status={}",
+            event.event_type, event.session_id, source, target_url, target_source, status
         )),
         Err(error) => append_log(format!(
-            "failed: event={} session={} target={} source={} error={}",
-            event.event_type, event.session_id, target_url, target_source, error
+            "failed: event={} session={} source={} target={} via={} error={}",
+            event.event_type, event.session_id, source, target_url, target_source, error
         )),
     }
 }
@@ -118,20 +122,114 @@ fn extract_string(payload: &serde_json::Value, keys: &[&str]) -> Option<String> 
     })
 }
 
+fn resolve_event_type(argv_event: Option<&str>, payload: &serde_json::Value) -> String {
+    if let Some(arg) = argv_event.filter(|value| !value.is_empty()) {
+        return normalize_event_type(arg);
+    }
+
+    if let Some(name) = extract_string(payload, &["hook_event_name", "event_type", "eventType"]) {
+        return normalize_event_type(&name);
+    }
+
+    "unknown".to_string()
+}
+
+fn resolve_source(payload: &serde_json::Value) -> &'static str {
+    if payload.get("hook_event_name").is_some()
+        || payload.get("cursor_version").is_some()
+        || payload.get("conversation_id").is_some()
+        || payload.get("conversationId").is_some()
+    {
+        "cursor"
+    } else {
+        "claude"
+    }
+}
+
+fn resolve_session_id(payload: &serde_json::Value, event_type: &str) -> String {
+    if matches!(event_type, "subagent-start" | "subagent-stop") {
+        if let Some(id) = extract_string(
+            payload,
+            &[
+                "parent_conversation_id",
+                "parentConversationId",
+                "conversation_id",
+                "conversationId",
+                "session_id",
+                "sessionId",
+            ],
+        ) {
+            return id;
+        }
+    }
+
+    extract_string(
+        payload,
+        &[
+            "conversation_id",
+            "conversationId",
+            "session_id",
+            "sessionId",
+        ],
+    )
+    .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn resolve_cwd(payload: &serde_json::Value) -> Option<String> {
+    extract_string(payload, &["cwd"]).or_else(|| {
+        payload
+            .get("workspace_roots")
+            .and_then(|value| value.as_array())
+            .and_then(|roots| roots.first())
+            .and_then(|value| value.as_str())
+            .map(ToString::to_string)
+    })
+}
+
+fn resolve_tool_call(payload: &serde_json::Value) -> Option<String> {
+    extract_string(
+        payload,
+        &["tool_name", "tool", "toolName", "command", "subagent_type"],
+    )
+}
+
+fn resolve_task_hint(payload: &serde_json::Value) -> Option<String> {
+    extract_string(payload, &["prompt", "task", "user_prompt", "message", "description"])
+}
+
 fn normalize_event_type(event_type: &str) -> String {
     match event_type {
-        "SessionStart" | "session_start" | "sessionstart" => "session-start",
+        // Claude Code
+        "SessionStart" | "session_start" | "sessionstart" | "sessionStart" => "session-start",
         "UserPromptSubmit" | "prompt_submit" | "user-prompt-submit" | "userpromptsubmit" => {
             "prompt-submit"
         }
-        "PreToolUse" | "pre_tool_use" | "pre-tool-use" | "pretooluse" => "pre-tool-use",
+        "PreToolUse" | "pre_tool_use" | "pre-tool-use" | "pretooluse" | "preToolUse" => {
+            "pre-tool-use"
+        }
         "PermissionRequest" | "permission_request" | "permission-request" | "permissionrequest" => {
             "permission-request"
         }
-        "PostToolUse" | "post_tool_use" | "post-tool-use" | "posttooluse" => "post-tool-use",
+        "PostToolUse" | "post_tool_use" | "post-tool-use" | "posttooluse" | "postToolUse" => {
+            "post-tool-use"
+        }
         "Notification" | "notification" => "notification",
         "Stop" | "stop" => "stop",
-        "SessionEnd" | "session_end" | "sessionend" => "session-end",
+        "SessionEnd" | "session_end" | "sessionend" | "sessionEnd" => "session-end",
+        // Cursor-specific
+        "beforeSubmitPrompt" | "before-submit-prompt" => "before-submit-prompt",
+        "postToolUseFailure" | "post-tool-use-failure" => "post-tool-use-failure",
+        "beforeShellExecution" | "before-shell-execution" => "before-shell-execution",
+        "afterShellExecution" | "after-shell-execution" => "after-shell-execution",
+        "beforeMCPExecution" | "before-mcp-execution" => "before-mcp-execution",
+        "afterMCPExecution" | "after-mcp-execution" => "after-mcp-execution",
+        "beforeReadFile" | "before-read-file" => "before-read-file",
+        "afterFileEdit" | "after-file-edit" => "after-file-edit",
+        "afterAgentResponse" | "after-agent-response" => "after-agent-response",
+        "afterAgentThought" | "after-agent-thought" => "after-agent-thought",
+        "subagentStart" | "subagent-start" => "subagent-start",
+        "subagentStop" | "subagent-stop" => "subagent-stop",
+        "preCompact" | "pre-compact" => "pre-compact",
         other => other,
     }
     .to_string()
@@ -191,44 +289,59 @@ mod tests {
     use super::*;
 
     #[test]
-    fn normalizes_claude_hook_names() {
+    fn normalizes_claude_and_cursor_hook_names() {
         assert_eq!(normalize_event_type("SessionStart"), "session-start");
-        assert_eq!(normalize_event_type("UserPromptSubmit"), "prompt-submit");
-        assert_eq!(normalize_event_type("PreToolUse"), "pre-tool-use");
+        assert_eq!(normalize_event_type("sessionStart"), "session-start");
+        assert_eq!(normalize_event_type("preToolUse"), "pre-tool-use");
         assert_eq!(
-            normalize_event_type("PermissionRequest"),
-            "permission-request"
+            normalize_event_type("beforeShellExecution"),
+            "before-shell-execution"
         );
-        assert_eq!(normalize_event_type("PostToolUse"), "post-tool-use");
-        assert_eq!(normalize_event_type("SessionEnd"), "session-end");
+        assert_eq!(normalize_event_type("subagentStart"), "subagent-start");
     }
 
     #[test]
-    fn extracts_first_present_string_key() {
+    fn resolves_cursor_conversation_id() {
         let payload = serde_json::json!({
-            "sessionId": "abc123",
-            "cwd": "N:/AI/ai_light"
+            "conversation_id": "conv-123",
+            "hook_event_name": "beforeShellExecution",
+            "command": "npm test"
+        });
+
+        assert_eq!(resolve_source(&payload), "cursor");
+        assert_eq!(
+            resolve_session_id(&payload, "before-shell-execution"),
+            "conv-123"
+        );
+        assert_eq!(
+            resolve_event_type(None, &payload),
+            "before-shell-execution"
+        );
+    }
+
+    #[test]
+    fn subagent_events_use_parent_conversation_id() {
+        let payload = serde_json::json!({
+            "subagent_id": "sub-1",
+            "parent_conversation_id": "conv-parent",
+            "hook_event_name": "subagentStart"
         });
 
         assert_eq!(
-            extract_string(&payload, &["session_id", "sessionId"]),
-            Some("abc123".to_string())
+            resolve_session_id(&payload, "subagent-start"),
+            "conv-parent"
         );
     }
 
     #[test]
-    fn prefers_explicit_event_url_environment_variable() {
-        let previous = env::var_os("AI_LIGHT_URL");
-        env::set_var("AI_LIGHT_URL", "http://127.0.0.1:32123");
+    fn extracts_workspace_root_as_cwd() {
+        let payload = serde_json::json!({
+            "workspace_roots": ["/home/user/project"]
+        });
 
         assert_eq!(
-            resolve_event_url(),
-            Some(("http://127.0.0.1:32123/events".to_string(), "AI_LIGHT_URL"))
+            resolve_cwd(&payload).as_deref(),
+            Some("/home/user/project")
         );
-
-        match previous {
-            Some(value) => env::set_var("AI_LIGHT_URL", value),
-            None => env::remove_var("AI_LIGHT_URL"),
-        }
     }
 }

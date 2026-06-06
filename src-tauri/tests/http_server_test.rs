@@ -65,4 +65,27 @@ fn map_hook_event_types_to_statuses() {
     );
     assert_eq!(HookEvent::event_type_to_status("stop"), Some(Status::Done));
     assert_eq!(HookEvent::event_type_to_status("session-end"), None);
+    assert_eq!(
+        HookEvent::event_type_to_status("before-shell-execution"),
+        Some(Status::Waiting)
+    );
+    assert_eq!(
+        HookEvent::event_type_to_status("before-mcp-execution"),
+        Some(Status::Waiting)
+    );
+    assert_eq!(
+        HookEvent::event_type_to_status("after-shell-execution"),
+        Some(Status::Working)
+    );
+}
+
+#[test]
+fn cursor_event_resolves_cursor_tool() {
+    let event = parse_hook_event(
+        r#"{"event_type":"before-shell-execution","session_id":"conv-1","source":"cursor"}"#,
+    )
+    .unwrap();
+
+    assert_eq!(event.resolve_tool(), deva_light::types::Tool::Cursor);
+    assert!(event.should_track());
 }

@@ -274,7 +274,13 @@ fn restore_existing_rollout(
         status = Status::Waiting;
     }
 
-    aggregator.add_session(meta.session_id.clone(), Tool::Codex, &meta.cwd, status);
+    aggregator.add_session_with_context(
+        meta.session_id.clone(),
+        Tool::Codex,
+        &meta.cwd,
+        status,
+        Some(path),
+    );
     if let Some(tool_call) = last_tool_call {
         aggregator.set_last_tool_call(&meta.session_id, tool_call);
     }
@@ -322,7 +328,7 @@ fn process_new_lines(
         }
 
         match parse_codex_line(line.trim_end()) {
-            Ok(event) => apply_codex_event(aggregator, watched, event),
+            Ok(event) => apply_codex_event(aggregator, watched, event, path),
             Err(error) => log_watcher_error(&format!("parse {}", path.display()), &error),
         }
     }
@@ -335,16 +341,18 @@ fn apply_codex_event(
     aggregator: &StateAggregator,
     watched: &mut WatchedRollout,
     event: CodexLineEvent,
+    rollout_path: &Path,
 ) {
     match event {
         CodexLineEvent::SessionMeta(meta) => {
             let is_new_meta = watched.meta.as_ref() != Some(&meta);
             if !watched.added_to_aggregator {
-                aggregator.add_session(
+                aggregator.add_session_with_context(
                     meta.session_id.clone(),
                     Tool::Codex,
                     &meta.cwd,
                     Status::Idle,
+                    Some(rollout_path),
                 );
                 watched.added_to_aggregator = true;
                 watched.last_status = Some(Status::Idle);
@@ -366,7 +374,13 @@ fn apply_codex_event(
             let status_changed = watched.last_status != Some(status);
 
             if !watched.added_to_aggregator {
-                aggregator.add_session(meta.session_id.clone(), Tool::Codex, &meta.cwd, status);
+                aggregator.add_session_with_context(
+                    meta.session_id.clone(),
+                    Tool::Codex,
+                    &meta.cwd,
+                    status,
+                    Some(rollout_path),
+                );
                 watched.added_to_aggregator = true;
             } else {
                 aggregator.update_session_status(&meta.session_id, status);
@@ -584,7 +598,7 @@ fn process_new_lines_ssh(
 
     for line in processable.lines() {
         match parse_codex_line(line) {
-            Ok(event) => apply_codex_event(aggregator, watched, event),
+            Ok(event) => apply_codex_event(aggregator, watched, event, path),
             Err(error) => log_watcher_error(&format!("parse {}", path.display()), &error),
         }
     }
@@ -999,10 +1013,12 @@ mod tests {
 
         let lights = aggregator.get_lights();
         assert_eq!(lights.len(), 2);
-        assert!(lights.iter().any(|light| light.project_id == first_project));
         assert!(lights
             .iter()
-            .any(|light| light.project_id == second_project));
+            .any(|light| light.logical_project_id == first_project));
+        assert!(lights
+            .iter()
+            .any(|light| light.logical_project_id == second_project));
 
         let _ = fs::remove_dir_all(first_root);
         let _ = fs::remove_dir_all(second_root);

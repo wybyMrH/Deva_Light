@@ -39,8 +39,8 @@ gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 2. 提交并打 tag：
 
 ```bash
-git tag v0.1.12
-git push origin v0.1.12
+git tag v0.1.13
+git push origin v0.1.13
 ```
 
 3. GitHub Actions `Release` workflow 会构建安装包、签名 updater 产物、上传 `latest.json`，并**直接发布** Release。
@@ -55,6 +55,7 @@ https://github.com/wybyMrH/Deva_Light/releases/latest/download/latest.json
 
 - **首次**从无 updater 的旧版升级，仍需手动安装一次带 updater 的版本；之后均可应用内更新
 - Release 必须是 **已发布** 状态（非 Draft），`latest.json` 才会对外可见
+- 仓库需为 **公开**，否则未认证的 `latest.json` 请求会返回 404
 - Windows 使用 NSIS `.exe` 作为更新包
 - macOS 使用 `.app.tar.gz` 更新包
 - 开发模式（`npm run dev`）不会自动检查更新

@@ -24,23 +24,57 @@ pub struct HookEvent {
     pub cwd: Option<String>,
     #[serde(default, alias = "tool", alias = "toolName", alias = "tool_name")]
     pub tool_call: Option<String>,
-    #[serde(default, alias = "prompt", alias = "user_prompt", alias = "message")]
+    #[serde(default, alias = "prompt", alias = "user_prompt", alias = "message", alias = "task")]
     pub task_hint: Option<String>,
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 impl HookEvent {
     pub fn event_type_to_status(event_type: &str) -> Option<Status> {
         match event_type {
             "session-start" => Some(Status::Idle),
-            "prompt-submit" => Some(Status::Working),
+            "prompt-submit" | "before-submit-prompt" => Some(Status::Working),
             "pre-tool-use" => Some(Status::Working),
             "permission-request" => Some(Status::Waiting),
-            "post-tool-use" => Some(Status::Working),
+            "post-tool-use" | "post-tool-use-failure" => Some(Status::Working),
             "notification" => Some(Status::Waiting),
+            // Cursor approval gates (no Claude PermissionRequest equivalent)
+            "before-shell-execution" | "before-mcp-execution" | "before-read-file" => {
+                Some(Status::Waiting)
+            }
+            "after-shell-execution"
+            | "after-mcp-execution"
+            | "after-file-edit"
+            | "after-agent-response"
+            | "after-agent-thought" => Some(Status::Working),
+            "subagent-start" | "subagent-stop" | "pre-compact" => Some(Status::Working),
             "stop" => Some(Status::Done),
             "session-end" => None,
             _ => None,
         }
+    }
+
+    pub fn resolve_tool(&self) -> Tool {
+        if self.source.as_deref() == Some("cursor") {
+            return Tool::Cursor;
+        }
+        Tool::ClaudeCode
+    }
+
+    pub fn is_subagent_event(&self) -> bool {
+        matches!(
+            self.event_type.as_str(),
+            "subagent-start" | "subagent-stop"
+        )
+    }
+
+    pub fn should_track(&self) -> bool {
+        if self.session_id != "unknown" {
+            return true;
+        }
+
+        matches!(self.event_type.as_str(), "session-start" | "session-end")
     }
 }
 
@@ -346,12 +380,25 @@ fn read_http_request(stream: &mut TcpStream) -> io::Result<Option<(String, Strin
 }
 
 fn apply_hook_event(aggregator: &StateAggregator, event: HookEvent) {
+    if !event.should_track() {
+        log_info(
+            "http_server",
+            format!(
+                "ignored {} without conversation/session id",
+                event.event_type
+            ),
+        );
+        return;
+    }
+
+    let tool = event.resolve_tool();
     log_info(
         "http_server",
         format!(
-            "event {} session={} cwd={} tool={}",
+            "event {} session={} source={:?} cwd={} tool={}",
             event.event_type,
             event.session_id,
+            event.source,
             event.cwd.as_deref().unwrap_or("-"),
             event.tool_call.as_deref().unwrap_or("-")
         ),
@@ -359,20 +406,14 @@ fn apply_hook_event(aggregator: &StateAggregator, event: HookEvent) {
 
     match event.event_type.as_str() {
         "session-start" => {
-            let cwd = event
-                .cwd
-                .as_deref()
-                .map(PathBuf::from)
-                .or_else(|| std::env::current_dir().ok())
-                .unwrap_or_else(|| PathBuf::from("."));
-
-            aggregator.add_session(event.session_id, Tool::ClaudeCode, &cwd, Status::Idle);
+            let cwd = resolve_event_cwd(&event);
+            aggregator.add_session(event.session_id, tool, &cwd, Status::Idle);
         }
         "session-end" => {
             aggregator.remove_session(&event.session_id);
         }
         _ => {
-            ensure_session_exists(aggregator, &event);
+            ensure_session_exists(aggregator, &event, tool);
 
             if should_ignore_late_event_after_done(aggregator, &event) {
                 log_info(
@@ -400,24 +441,33 @@ fn apply_hook_event(aggregator: &StateAggregator, event: HookEvent) {
     }
 }
 
-fn ensure_session_exists(aggregator: &StateAggregator, event: &HookEvent) {
-    if aggregator.session_status(&event.session_id).is_some() {
-        return;
-    }
-
-    let cwd = event
+fn resolve_event_cwd(event: &HookEvent) -> PathBuf {
+    event
         .cwd
         .as_deref()
         .map(PathBuf::from)
         .or_else(|| std::env::current_dir().ok())
-        .unwrap_or_else(|| PathBuf::from("."));
+        .unwrap_or_else(|| PathBuf::from("."))
+}
 
-    aggregator.add_session(
-        event.session_id.clone(),
-        Tool::ClaudeCode,
-        &cwd,
-        Status::Idle,
-    );
+fn ensure_session_exists(aggregator: &StateAggregator, event: &HookEvent, tool: Tool) {
+    if aggregator.session_status(&event.session_id).is_some() {
+        return;
+    }
+
+    if event.is_subagent_event() {
+        log_info(
+            "http_server",
+            format!(
+                "skipped orphan subagent {} for parent session {}",
+                event.event_type, event.session_id
+            ),
+        );
+        return;
+    }
+
+    let cwd = resolve_event_cwd(event);
+    aggregator.add_session(event.session_id.clone(), tool, &cwd, Status::Idle);
     log_info(
         "http_server",
         format!(
@@ -434,7 +484,13 @@ fn should_ignore_late_event_after_done(aggregator: &StateAggregator, event: &Hoo
 
     matches!(
         event.event_type.as_str(),
-        "pre-tool-use" | "permission-request" | "post-tool-use" | "notification"
+        "pre-tool-use"
+            | "permission-request"
+            | "post-tool-use"
+            | "notification"
+            | "before-shell-execution"
+            | "before-mcp-execution"
+            | "before-read-file"
     )
 }
 

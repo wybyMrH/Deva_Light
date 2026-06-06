@@ -1,3 +1,4 @@
+use crate::monitor_origin::MonitorOrigin;
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
 
@@ -20,6 +21,7 @@ pub enum Status {
 pub enum Tool {
     ClaudeCode,
     Codex,
+    Cursor,
 }
 
 /// Source of the session (for retention policy)
@@ -40,9 +42,9 @@ pub struct SessionRef {
     /// Human-readable task name (from Codex prompt or Claude context)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task_name: Option<String>,
-    /// Source type for retention policy
+    /// Monitor environment (local / WSL / SSH / remote LAN)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub source: Option<SessionSource>,
+    pub monitor_origin: Option<MonitorOrigin>,
     /// Process ID for alive detection
     #[serde(skip_serializing_if = "Option::is_none")]
     pub process_id: Option<i32>,
@@ -52,20 +54,32 @@ pub struct SessionRef {
 pub struct LightState {
     pub project_id: String,
     pub project_label: String,
+    pub logical_project_id: String,
+    pub monitor_origin: MonitorOrigin,
     pub status: Status,
     pub sessions: Vec<SessionRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace_path: Option<String>,
     #[serde(skip)]
     pub last_event_at: Instant,
     pub last_tool_call: Option<String>,
 }
 
 impl LightState {
-    pub fn new(project_id: String, project_label: String) -> Self {
+    pub fn new(
+        project_id: String,
+        logical_project_id: String,
+        project_label: String,
+        monitor_origin: MonitorOrigin,
+    ) -> Self {
         Self {
             project_id,
             project_label,
+            logical_project_id,
+            monitor_origin,
             status: Status::Idle,
             sessions: Vec::new(),
+            workspace_path: None,
             last_event_at: Instant::now(),
             last_tool_call: None,
         }
