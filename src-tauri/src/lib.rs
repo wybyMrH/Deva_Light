@@ -1,6 +1,7 @@
 pub mod aggregator;
 pub mod app_lock;
 pub mod claude_watcher;
+pub mod cursor_watcher;
 pub mod codex_paths;
 pub mod codex_watcher;
 pub mod config;

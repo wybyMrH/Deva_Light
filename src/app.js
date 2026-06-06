@@ -1,12 +1,15 @@
 import {
   createDrawer,
   updateProjectDrawer,
+  updateDrawer,
   showProjectDrawer,
+  showDrawer,
   hideDrawer,
   getBadgeText,
   shouldShowBadge,
   isDrawerOpen,
   getDrawerMode,
+  getCurrentDrawerProjectId,
 } from "./drawer.js";
 
 const tauriEvent = window.__TAURI__?.event;
@@ -217,6 +220,24 @@ function cycleCompactProject() {
   render();
 }
 
+function toggleSessionDrawer(projectId, lightState) {
+  if (
+    isDrawerOpen() &&
+    getDrawerMode() === "sessions" &&
+    getCurrentDrawerProjectId() === projectId
+  ) {
+    hideDrawer();
+    return;
+  }
+
+  showDrawer(
+    projectId,
+    drawer,
+    lightState.sessions || [],
+    lightState.project_label || "",
+  );
+}
+
 function render() {
   const displayLights = lightsForDisplay();
   const visibleProjectIds = new Set(displayLights.map((light) => light.project_id));
@@ -244,18 +265,28 @@ function render() {
     element.classList.toggle(
       "is-drawer-active",
       isDrawerOpen() &&
-        getDrawerMode() === "projects" &&
-        displayMode === "compact" &&
-        projectId === compactFocusProjectId,
+        ((getDrawerMode() === "projects" &&
+          displayMode === "compact" &&
+          projectId === compactFocusProjectId) ||
+          (getDrawerMode() === "sessions" &&
+            projectId === getCurrentDrawerProjectId())),
     );
   }
 
-  if (
-    displayMode === "parallel" &&
-    isDrawerOpen() &&
-    getDrawerMode() !== "projects"
-  ) {
-    hideDrawer();
+  if (isDrawerOpen() && getDrawerMode() === "sessions") {
+    const drawerProjectId = getCurrentDrawerProjectId();
+    const drawerLight = lights.find(
+      (light) => light.project_id === drawerProjectId,
+    );
+    if (drawerLight && (drawerLight.sessions?.length || 0) > 1) {
+      updateDrawer(
+        drawer,
+        drawerLight.sessions,
+        drawerLight.project_label || "",
+      );
+    } else {
+      hideDrawer();
+    }
   }
 
   if (
@@ -343,20 +374,36 @@ function createProjectLight(lightState) {
       return;
     }
 
-    if (displayMode !== "compact" && sessions.length > 1) {
+    if (displayMode === "parallel" && sessions.length > 1) {
       event.stopPropagation();
       hideMenu();
 
+      if (event.target.closest(".session-badge")) {
+        toggleSessionDrawer(projectId, root.lightState);
+        scheduleWindowResize();
+        return;
+      }
+
       const chip = event.target.closest(".tool-chip");
       if (chip) {
-        const chipIndex = [...root.querySelectorAll(".tool-chip")].indexOf(chip);
-        const session = sessions[chipIndex];
+        const session = sessions.find(
+          (entry) => entry.session_id === chip.dataset.sessionId,
+        );
         if (
           session &&
           (session.status === "Waiting" || session.status === "Done")
         ) {
           safeInvoke("confirm_session", { sessionId: session.session_id });
         }
+        return;
+      }
+
+      if (
+        event.target.closest(".light-housing") ||
+        event.target.closest(".light-label")
+      ) {
+        toggleSessionDrawer(projectId, root.lightState);
+        scheduleWindowResize();
         return;
       }
 
@@ -449,8 +496,11 @@ function updateProjectLight(root, lightState) {
       badge.title = "点击打开项目列表";
       badge.classList.remove("hidden");
     } else if (shouldShowBadge(sessions)) {
-      badge.textContent = getBadgeText(sessions);
-      badge.title = "多会话";
+      badge.textContent = getBadgeText(sessions, displayMode);
+      badge.title =
+        displayMode === "parallel"
+          ? `${sessions.length} 个会话 · 点击展开列表`
+          : "多会话";
       badge.classList.remove("hidden");
     } else {
       badge.classList.add("hidden");
@@ -529,9 +579,10 @@ function updateSessionChips(root, sessions) {
   sessions.forEach((session) => {
     const chip = document.createElement("span");
     const meta = toolMeta(session.tool);
-    chip.className = `tool-chip ${meta.chipClass}`;
-    chip.title = `${meta.label} · ${session.task_name || session.session_id}`;
-    chip.textContent = meta.icon;
+    chip.className = `tool-chip ${meta.chipClass} status-${String(session.status).toLowerCase()}`;
+    chip.dataset.sessionId = session.session_id;
+    chip.title = `${meta.label} · ${session.status} · ${session.task_name || session.session_id}`;
+    chip.textContent = meta.shortLabel;
 
     if (isInteractive) {
       chip.addEventListener("click", (event) => {
@@ -555,11 +606,11 @@ function createLamp(color, isOn) {
 function toolMeta(tool) {
   switch (String(tool)) {
     case "Codex":
-      return { label: "Codex", chipClass: "codex", icon: "◇" };
+      return { label: "Codex", chipClass: "codex", shortLabel: "X", icon: "◇" };
     case "Cursor":
-      return { label: "Cursor", chipClass: "cursor", icon: "●" };
+      return { label: "Cursor", chipClass: "cursor", shortLabel: "U", icon: "●" };
     default:
-      return { label: "Claude", chipClass: "claude", icon: "◆" };
+      return { label: "Claude", chipClass: "claude", shortLabel: "C", icon: "◆" };
   }
 }
 

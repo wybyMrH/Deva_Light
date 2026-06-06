@@ -212,6 +212,15 @@ pub fn get_ui_config() -> UiConfigView {
 }
 
 #[tauri::command]
+pub fn set_display_mode(app: AppHandle, mode: String) -> Result<(), String> {
+    let mut config = load_app_config();
+    config.display_mode = parse_display_mode(&mode)?;
+    save_app_config(&config).map_err(|error| error.to_string())?;
+    let _ = app.emit("config-changed", get_ui_config());
+    Ok(())
+}
+
+#[tauri::command]
 pub fn save_app_config_command(
     app: AppHandle,
     http_server: State<Arc<HttpServerController>>,

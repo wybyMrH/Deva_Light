@@ -90,3 +90,13 @@ fn cursor_event_resolves_cursor_tool() {
     assert!(event.should_track());
 }
 
+#[test]
+fn cursor_pre_tool_use_resolves_to_waiting() {
+    let event = parse_hook_event(
+        r#"{"event_type":"pre-tool-use","session_id":"conv-1","source":"cursor","tool_call":"Shell"}"#,
+    )
+    .unwrap();
+
+    assert_eq!(event.resolve_status(), Some(Status::Waiting));
+}
+

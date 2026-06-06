@@ -245,7 +245,12 @@ export function showProjectDrawer(drawerRoot, projects) {
   notifyVisibilityChange();
 }
 
-export function showDrawer(projectId, drawerRoot, projectLabel = "") {
+export function showDrawer(
+  projectId,
+  drawerRoot,
+  sessions,
+  projectLabel = "",
+) {
   drawerMode = "sessions";
   currentDrawerProjectId = projectId;
   drawerRoot.hidden = false;
@@ -255,11 +260,7 @@ export function showDrawer(projectId, drawerRoot, projectLabel = "") {
     panel.hidden = false;
   }
 
-  const title = drawerRoot.querySelector(".drawer-title");
-  if (title && projectLabel) {
-    title.textContent = `${projectLabel} · 会话`;
-  }
-
+  updateDrawer(drawerRoot, sessions, projectLabel);
   notifyVisibilityChange();
 }
 
@@ -301,8 +302,11 @@ function notifyVisibilityChange() {
 /**
  * Get badge text for session count
  */
-export function getBadgeText(sessions) {
+export function getBadgeText(sessions, mode = "parallel") {
   if (sessions.length <= 1) return "";
+  if (mode === "parallel") {
+    return String(sessions.length);
+  }
   const completed = sessions.filter((s) => s.status === "Done").length;
   return `${completed}/${sessions.length}`;
 }

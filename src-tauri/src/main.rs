@@ -60,6 +60,7 @@ fn main() {
             ipc::resume_monitoring,
             ipc::get_monitoring_paused,
             ipc::get_ui_config,
+            ipc::set_display_mode,
             ipc::get_remote_setup_info,
             ipc::get_app_version,
             ipc::check_for_update,
@@ -183,6 +184,7 @@ fn main() {
                 .map_err(|error| std::io::Error::other(error))?;
             deva_light::codex_watcher::start_codex_watcher(Arc::clone(&aggregator))?;
             deva_light::claude_watcher::start_claude_watcher(Arc::clone(&aggregator));
+            deva_light::cursor_watcher::start_cursor_watcher(Arc::clone(&aggregator));
             log_info("app", "watchers started");
 
             window.emit("state-changed", aggregator.get_lights())?;

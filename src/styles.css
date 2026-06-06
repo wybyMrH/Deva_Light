@@ -49,9 +49,9 @@ body {
 
 .traffic-light {
   position: relative;
-  width: max-content;
-  min-width: 72px;
-  max-width: 140px;
+  width: 52px;
+  min-width: 52px;
+  max-width: 72px;
   min-height: 148px;
   display: flex;
   flex-direction: column;
@@ -158,22 +158,37 @@ body {
   align-items: center;
   justify-content: center;
   gap: 2px;
-  max-width: 48px;
+  max-width: 52px;
   flex-wrap: wrap;
   z-index: 2;
   pointer-events: none;
 }
 
 .tool-chip {
-  width: 11px;
-  height: 11px;
+  width: 14px;
+  height: 14px;
   border-radius: 3px;
-  font-size: 7px;
-  line-height: 11px;
+  font-size: 8px;
+  line-height: 14px;
   text-align: center;
   font-weight: 700;
   color: #fff;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.tool-chip.status-waiting {
+  border-color: rgba(251, 191, 36, 0.95);
+  box-shadow: 0 0 6px rgba(251, 191, 36, 0.75);
+}
+
+.tool-chip.status-working {
+  border-color: rgba(34, 197, 94, 0.85);
+}
+
+.tool-chip.status-done,
+.tool-chip.status-idle {
+  opacity: 0.72;
 }
 
 .tool-chip.claude {
@@ -289,19 +304,22 @@ body {
 }
 
 .light-label {
-  min-width: 72px;
-  max-width: 132px;
+  width: 56px;
+  min-width: 56px;
+  max-width: 56px;
   cursor: grab;
   color: rgba(255, 255, 255, 0.92);
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 650;
-  line-height: 1.25;
+  line-height: 1.2;
   text-align: center;
   overflow: hidden;
   display: -webkit-box;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  word-break: break-word;
+  -webkit-line-clamp: 3;
+  word-break: break-all;
+  overflow-wrap: anywhere;
+  white-space: normal;
   background: var(--hit-test-bg);
   text-shadow:
     -1px -1px 0 rgba(0, 0, 0, 0.95),

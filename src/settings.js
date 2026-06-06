@@ -71,6 +71,18 @@ document.querySelectorAll('input[name="http-bind"]').forEach((input) => {
   input.addEventListener("change", syncLanDetailsVisibility);
 });
 
+document.querySelectorAll('input[name="display-mode"]').forEach((input) => {
+  input.addEventListener("change", applyDisplayMode);
+});
+
+async function applyDisplayMode() {
+  try {
+    await invoke("set_display_mode", { mode: getDisplayMode() });
+  } catch (error) {
+    console.debug("applyDisplayMode", error);
+  }
+}
+
 notificationsEnabledCheckbox.addEventListener("change", syncNotificationOptions);
 
 saveButton.addEventListener("click", saveSettings);

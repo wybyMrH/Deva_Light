@@ -31,6 +31,18 @@ pub struct HookEvent {
 }
 
 impl HookEvent {
+    pub fn resolve_status(&self) -> Option<Status> {
+        let status = Self::event_type_to_status(&self.event_type)?;
+
+        // Cursor shows approval UI after preToolUse; beforeShellExecution only fires
+        // after the user accepts, so we mark Waiting as soon as a tool is proposed.
+        if self.source.as_deref() == Some("cursor") && self.event_type == "pre-tool-use" {
+            return Some(Status::Waiting);
+        }
+
+        Some(status)
+    }
+
     pub fn event_type_to_status(event_type: &str) -> Option<Status> {
         match event_type {
             "session-start" => Some(Status::Idle),
@@ -426,7 +438,7 @@ fn apply_hook_event(aggregator: &StateAggregator, event: HookEvent) {
                 return;
             }
 
-            if let Some(status) = HookEvent::event_type_to_status(&event.event_type) {
+            if let Some(status) = event.resolve_status() {
                 if should_apply_status_transition(
                     aggregator.session_status(&event.session_id),
                     status,
@@ -501,7 +513,9 @@ fn should_apply_status_transition(
     if source == Some("cursor") {
         return matches!(
             event_type,
-            "after-shell-execution"
+            "post-tool-use"
+                | "post-tool-use-failure"
+                | "after-shell-execution"
                 | "after-mcp-execution"
                 | "after-file-edit"
                 | "stop"
@@ -613,5 +627,25 @@ mod tests {
             "after-shell-execution",
             Some("cursor"),
         ));
+        assert!(should_apply_status_transition(
+            Some(Status::Waiting),
+            Status::Working,
+            "post-tool-use",
+            Some("cursor"),
+        ));
+    }
+
+    #[test]
+    fn cursor_pre_tool_use_maps_to_waiting() {
+        let event = HookEvent {
+            event_type: "pre-tool-use".to_string(),
+            session_id: "conv-1".to_string(),
+            cwd: None,
+            tool_call: Some("Shell".to_string()),
+            task_hint: None,
+            source: Some("cursor".to_string()),
+        };
+
+        assert_eq!(event.resolve_status(), Some(Status::Waiting));
     }
 }
