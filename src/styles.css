@@ -179,7 +179,8 @@ body {
 
 .tool-chip.status-waiting {
   border-color: rgba(251, 191, 36, 0.95);
-  box-shadow: 0 0 6px rgba(251, 191, 36, 0.75);
+  box-shadow: 0 0 6px rgba(251, 191, 36, 0.55);
+  animation: waiting-chip-glow 2.4s ease-in-out infinite;
 }
 
 .tool-chip.status-working {
@@ -292,9 +293,11 @@ body {
 
 .lamp.yellow.on {
   background: radial-gradient(circle at 34% 30%, #fef08a, #fbbf24 45%, #92400e);
-  box-shadow: 0 0 20px rgba(251, 191, 36, 0.78);
+  box-shadow:
+    0 0 14px rgba(251, 191, 36, 0.55),
+    0 0 28px rgba(251, 191, 36, 0.28);
   opacity: 1;
-  animation: working-pulse 1.4s ease-in-out infinite;
+  animation: waiting-glow 2.4s ease-in-out infinite;
 }
 
 .lamp.green.on {
@@ -375,15 +378,42 @@ body {
   color: rgba(229, 231, 235, 0.72);
 }
 
-@keyframes working-pulse {
+@keyframes waiting-glow {
   0%,
   100% {
-    opacity: 1;
-    transform: scale(1);
+    opacity: 0.82;
+    box-shadow:
+      0 0 12px rgba(251, 191, 36, 0.45),
+      0 0 22px rgba(251, 191, 36, 0.2);
+    filter: brightness(0.95);
   }
 
   50% {
-    opacity: 0.72;
-    transform: scale(0.93);
+    opacity: 1;
+    box-shadow:
+      0 0 18px rgba(251, 191, 36, 0.88),
+      0 0 36px rgba(251, 191, 36, 0.42);
+    filter: brightness(1.08);
+  }
+}
+
+@keyframes waiting-chip-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 4px rgba(251, 191, 36, 0.4);
+    opacity: 0.88;
+  }
+
+  50% {
+    box-shadow: 0 0 10px rgba(251, 191, 36, 0.85);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lamp.yellow.on,
+  .tool-chip.status-waiting {
+    animation: none;
+    opacity: 1;
   }
 }

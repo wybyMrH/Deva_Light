@@ -27,7 +27,11 @@ pub fn build_ssh_virtual_path(target: &str, remote_path: &str) -> PathBuf {
 }
 
 pub fn discover_codex_sessions_dir(target: &str) -> Option<PathBuf> {
-    let remote_dir = ssh_command(target, "printf '%s' \"$HOME/.codex/sessions\"").ok()?;
+    let remote_dir = ssh_command(
+        target,
+        r#"printf '%s' "${CODEX_HOME:-$HOME/.codex}/sessions""#,
+    )
+    .ok()?;
     if remote_dir.is_empty() {
         return None;
     }

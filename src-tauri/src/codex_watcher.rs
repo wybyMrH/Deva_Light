@@ -81,8 +81,15 @@ fn run_codex_watcher(aggregator: Arc<StateAggregator>) {
             .duration_since(last_wsl_scan)
             .map(|elapsed| elapsed >= WSL_SCAN_INTERVAL)
             .unwrap_or(true);
-        let (scan_roots, tracked_only_roots) =
+        let (mut scan_roots, tracked_only_roots) =
             partition_roots_for_poll(&roots.active, should_scan_wsl);
+        if should_scan_wsl {
+            for path in &roots.missing {
+                if is_wsl_unc_path(path) || is_ssh_virtual_path(path) {
+                    push_unique_root(&mut scan_roots, path);
+                }
+            }
+        }
 
         if let Err(error) =
             poll_codex_sessions(&aggregator, &mut files, baseline, &scan_roots, &tracked_only_roots)
@@ -94,6 +101,12 @@ fn run_codex_watcher(aggregator: Arc<StateAggregator>) {
         }
         baseline = false;
         thread::sleep(POLL_INTERVAL);
+    }
+}
+
+fn push_unique_root(roots: &mut Vec<PathBuf>, candidate: &Path) {
+    if !roots.iter().any(|path| path == candidate) {
+        roots.push(candidate.to_path_buf());
     }
 }
 
@@ -127,7 +140,7 @@ fn poll_codex_sessions(
     let tracked_paths = files.keys().cloned().collect::<HashSet<_>>();
 
     for root in scan_roots {
-        for path in find_rollout_files(root, &tracked_paths)? {
+        for path in find_rollout_files(root, &tracked_paths, baseline)? {
             if seen.insert(path.clone()) {
                 rollouts.push(path);
             }
@@ -142,6 +155,14 @@ fn poll_codex_sessions(
         }
     }
 
+    // Keep polling already-tracked rollouts even when their root is temporarily
+    // inaccessible (e.g. WSL UNC path flicker or SSH hiccup).
+    for path in tracked_paths {
+        if seen.insert(path.clone()) {
+            rollouts.push(path);
+        }
+    }
+
     poll_rollout_paths(aggregator, files, baseline, rollouts)
 }
 
@@ -153,7 +174,7 @@ fn poll_rollout_root(
     root: &Path,
 ) -> io::Result<()> {
     let tracked_paths = files.keys().cloned().collect::<HashSet<_>>();
-    let rollouts = find_rollout_files(&root, &tracked_paths)?;
+    let rollouts = find_rollout_files(root, &tracked_paths, baseline)?;
     poll_rollout_paths(aggregator, files, baseline, rollouts)
 }
 
@@ -265,11 +286,14 @@ fn restore_existing_rollout(
         return Ok(());
     };
 
-    if age >= REMOVE_INACTIVE_AFTER {
+    let mut status = watched.last_status.unwrap_or(Status::Idle);
+
+    // Skip only clearly finished sessions whose rollout has not changed recently.
+    // Active/working sessions may go quiet for long stretches and should still
+    // be restored after an app restart.
+    if age >= REMOVE_INACTIVE_AFTER && status != Status::Working {
         return Ok(());
     }
-
-    let mut status = watched.last_status.unwrap_or(Status::Idle);
     if status == Status::Working && age >= STALE_WORKING_AFTER {
         status = Status::Waiting;
     }
@@ -287,6 +311,7 @@ fn restore_existing_rollout(
 
     watched.added_to_aggregator = true;
     watched.last_status = Some(status);
+    watched.last_activity_at = SystemTime::now();
     log_watcher_note(&format!(
         "restored session {} from {} with status {}",
         meta.session_id,
@@ -607,7 +632,11 @@ fn process_new_lines_ssh(
     Ok(())
 }
 
-fn find_rollout_files(root: &Path, tracked_paths: &HashSet<PathBuf>) -> io::Result<Vec<PathBuf>> {
+fn find_rollout_files(
+    root: &Path,
+    tracked_paths: &HashSet<PathBuf>,
+    baseline: bool,
+) -> io::Result<Vec<PathBuf>> {
     if is_ssh_virtual_path(root) {
         return crate::ssh_remote::list_rollout_files(root)
             .map_err(|error| io::Error::new(io::ErrorKind::Other, error));
@@ -619,7 +648,7 @@ fn find_rollout_files(root: &Path, tracked_paths: &HashSet<PathBuf>) -> io::Resu
         return Ok(files);
     }
 
-    collect_rollout_files(root, tracked_paths, &mut files)?;
+    collect_rollout_files(root, tracked_paths, baseline, &mut files)?;
     files.sort();
     Ok(files)
 }
@@ -627,6 +656,7 @@ fn find_rollout_files(root: &Path, tracked_paths: &HashSet<PathBuf>) -> io::Resu
 fn collect_rollout_files(
     dir: &Path,
     tracked_paths: &HashSet<PathBuf>,
+    baseline: bool,
     files: &mut Vec<PathBuf>,
 ) -> io::Result<()> {
     for entry in fs::read_dir(dir)? {
@@ -635,10 +665,10 @@ fn collect_rollout_files(
         let file_type = entry.file_type()?;
 
         if file_type.is_dir() {
-            collect_rollout_files(&path, tracked_paths, files)?;
+            collect_rollout_files(&path, tracked_paths, baseline, files)?;
         } else if file_type.is_file()
             && is_rollout_file(&path)
-            && should_track_rollout_file(&path, tracked_paths)
+            && should_track_rollout_file(&path, tracked_paths, baseline)
         {
             files.push(path);
         }
@@ -647,8 +677,12 @@ fn collect_rollout_files(
     Ok(())
 }
 
-fn should_track_rollout_file(path: &Path, tracked_paths: &HashSet<PathBuf>) -> bool {
-    if tracked_paths.contains(path) {
+fn should_track_rollout_file(
+    path: &Path,
+    tracked_paths: &HashSet<PathBuf>,
+    baseline: bool,
+) -> bool {
+    if tracked_paths.contains(path) || baseline {
         return true;
     }
 
@@ -933,7 +967,7 @@ mod tests {
     }
 
     #[test]
-    fn baseline_existing_stale_working_rollout_is_not_restored() {
+    fn baseline_existing_stale_working_rollout_is_restored() {
         let root = std::env::temp_dir().join(unique_name("ai-light-codex-root"));
         let project = std::env::temp_dir().join(unique_name("ai-light-codex-project"));
         fs::create_dir_all(&root).unwrap();
@@ -962,7 +996,50 @@ mod tests {
         let mut files = HashMap::new();
         poll_rollout_root(&aggregator, &mut files, true, &root).unwrap();
 
-        assert!(aggregator.get_lights().is_empty());
+        let lights = aggregator.get_lights();
+        assert_eq!(lights.len(), 1);
+        assert_eq!(
+            lights[0].status,
+            Status::Waiting,
+            "long-idle working rollouts restore as waiting, not dropped"
+        );
+
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn tracked_rollout_keeps_polling_when_scan_root_is_empty() {
+        let root = std::env::temp_dir().join(unique_name("ai-light-codex-root"));
+        let project = std::env::temp_dir().join(unique_name("ai-light-codex-project"));
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&project).unwrap();
+
+        let rollout = root.join("rollout-2026-05-31T00-00-00-s1.jsonl");
+        fs::write(
+            &rollout,
+            format!(
+                "{}\n{}\n",
+                json_line(
+                    "session_meta",
+                    &format!(r#"{{"id":"s1","cwd":"{}"}}"#, json_path(&project))
+                ),
+                json_line("event_msg", r#"{"type":"task_started"}"#)
+            ),
+        )
+        .unwrap();
+
+        let aggregator = StateAggregator::new();
+        let mut files = HashMap::new();
+        poll_rollout_root(&aggregator, &mut files, false, &root).unwrap();
+        assert_eq!(aggregator.get_lights().len(), 1);
+
+        poll_codex_sessions(&aggregator, &mut files, false, &[], &[]).unwrap();
+        assert_eq!(
+            aggregator.get_lights().len(),
+            1,
+            "tracked rollout should survive temporary root inaccessibility"
+        );
 
         let _ = fs::remove_dir_all(root);
         let _ = fs::remove_dir_all(project);
@@ -1079,7 +1156,7 @@ mod tests {
         filetime::set_file_mtime(&tracked, old_time).unwrap();
 
         let tracked_paths = HashSet::from([tracked.clone()]);
-        let rollouts = find_rollout_files(&root, &tracked_paths).unwrap();
+        let rollouts = find_rollout_files(&root, &tracked_paths, false).unwrap();
 
         assert!(rollouts.contains(&fresh));
         assert!(rollouts.contains(&tracked));
