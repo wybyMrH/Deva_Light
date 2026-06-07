@@ -135,6 +135,14 @@ function switchPanel(panelId) {
     panelTitleEl.textContent = active.dataset.title || "";
     panelDescEl.textContent = active.dataset.desc || "";
   }
+
+  if (panelId === "about") {
+    void loadAppVersion();
+  }
+
+  if (panelId === "advanced") {
+    void refreshDiagnostics();
+  }
 }
 
 function getHttpBind() {
@@ -180,6 +188,7 @@ function syncNotificationOptions() {
 
 async function loadSettings() {
   setBusy(true);
+  setStatus("正在加载设置…");
 
   try {
     const config = await invoke("get_app_config");
@@ -204,13 +213,15 @@ async function loadSettings() {
 
     codexManualPathsInput.value = (config.codexManualPaths ?? []).join("\n");
 
-    await refreshDiagnostics();
-    await refreshRemoteSetup();
+    // Version and update check should not wait on slow diagnostics / remote probes.
     await loadAppVersion();
-    await checkForUpdates(false);
+    void checkForUpdates(false);
+
+    await Promise.allSettled([refreshDiagnostics(), refreshRemoteSetup()]);
     setStatus("");
   } catch (error) {
     setStatus(String(error), true);
+    void loadAppVersion();
   } finally {
     setBusy(false);
   }
@@ -260,16 +271,40 @@ async function saveSettings() {
 }
 
 async function loadAppVersion() {
+  if (!appVersionEl) return;
+
+  const formatVersion = (value) => (value ? `v${String(value).replace(/^v/i, "")}` : null);
+
   try {
-    appVersionEl.textContent = await invoke("get_app_version");
-  } catch {
-    appVersionEl.textContent = "未知";
+    const appVersion = await window.__TAURI__?.app?.getVersion?.();
+    const formatted = formatVersion(appVersion);
+    if (formatted) {
+      appVersionEl.textContent = formatted;
+      return;
+    }
+  } catch (error) {
+    console.debug("loadAppVersion:getVersion", error);
+  }
+
+  try {
+    if (!invoke) {
+      appVersionEl.textContent = "不可用";
+      return;
+    }
+
+    const version = await invoke("get_app_version");
+    const formatted = formatVersion(version);
+    appVersionEl.textContent = formatted || "未知";
+  } catch (error) {
+    appVersionEl.textContent = "读取失败";
+    console.debug("loadAppVersion", error);
   }
 }
 
 async function checkForUpdates(manual) {
   if (manual) {
-    setUpdateStatus("正在检查更新…", null);
+    setBusy(true);
+    reportUpdate("正在检查更新…", null);
   }
 
   try {
@@ -277,7 +312,7 @@ async function checkForUpdates(manual) {
     if (update) {
       showUpdateAvailable(update);
       if (manual) {
-        setUpdateStatus(`发现新版本 ${update.version}`, true);
+        reportUpdate(`发现新版本 ${update.version}`, true);
       }
       return update;
     }
@@ -285,16 +320,20 @@ async function checkForUpdates(manual) {
     pendingUpdate = null;
     updateCardEl.hidden = true;
     if (manual) {
-      setUpdateStatus("当前已是最新版本", true);
+      reportUpdate("当前已是最新版本", true);
     } else {
-      setUpdateStatus("");
+      reportUpdate("");
     }
     return null;
   } catch (error) {
     if (manual) {
-      setUpdateStatus(String(error), false);
+      reportUpdate(String(error), false);
     }
     return null;
+  } finally {
+    if (manual) {
+      setBusy(false);
+    }
   }
 }
 
@@ -309,16 +348,27 @@ function showUpdateAvailable(update) {
   updateProgressWrapEl.hidden = true;
   installUpdateButton.disabled = false;
   installUpdateButton.textContent = "立即更新并重启";
+
+  if (
+    appVersionEl &&
+    (appVersionEl.textContent === "—" ||
+      appVersionEl.textContent === "读取失败" ||
+      appVersionEl.textContent === "未知") &&
+    update.currentVersion
+  ) {
+    appVersionEl.textContent = `v${update.currentVersion}`;
+  }
 }
 
 async function installUpdate() {
   if (!pendingUpdate) {
-    setUpdateStatus("没有可安装的更新", false);
+    reportUpdate("没有可安装的更新", false);
     return;
   }
 
   const confirmed = confirm(
-    `将下载并安装 v${pendingUpdate.version}，安装完成后应用会自动重启。\n\n确定继续？`,
+    `将下载并安装 v${pendingUpdate.version}，安装完成后应用会自动重启。\n\n` +
+      "Windows 可能会弹出 UAC 安装提示，请留意任务栏。\n\n确定继续？",
   );
   if (!confirmed) return;
 
@@ -327,14 +377,18 @@ async function installUpdate() {
   installUpdateButton.textContent = "正在更新…";
   updateProgressWrapEl.hidden = false;
   renderUpdateProgress({ downloaded: 0, total: null, phase: "downloading" });
-  setUpdateStatus("正在下载更新包…", null);
+  reportUpdate("正在下载更新包…", null);
 
   try {
     await invoke("download_and_install_update");
+    reportUpdate("安装完成，正在重启…", true);
   } catch (error) {
-    setUpdateStatus(String(error), false);
+    const message = String(error);
+    reportUpdate(message, false);
     installUpdateButton.disabled = false;
     installUpdateButton.textContent = "立即更新并重启";
+    void refreshDiagnostics();
+  } finally {
     setBusy(false);
   }
 }
@@ -347,7 +401,7 @@ function renderUpdateProgress(progress) {
   if (progress.phase === "installing") {
     updateProgressFillEl.style.width = "100%";
     updateProgressTextEl.textContent = "下载完成，正在安装…";
-    setUpdateStatus("正在安装更新…", null);
+    reportUpdate("正在安装更新…（如有 UAC 提示请允许）", null);
     return;
   }
 
@@ -370,11 +424,9 @@ function formatBytes(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function setUpdateStatus(message, ok) {
-  updateStatusEl.textContent = message;
-  updateStatusEl.classList.remove("ok", "error");
-  if (ok === true) updateStatusEl.classList.add("ok");
-  if (ok === false) updateStatusEl.classList.add("error");
+function reportUpdate(message, ok) {
+  setUpdateStatus(message, ok);
+  setStatus(message, ok === false);
 }
 
 function renderSshTargets(targets) {
@@ -859,46 +911,61 @@ function diagnosticsText(diagnostics) {
   ].join("\n");
 }
 
-function setBusy(isBusy) {
-  saveButton.disabled = isBusy;
-  closeButton.disabled = isBusy;
-  installIntegrationButton.disabled = isBusy;
-  if (installCursorIntegrationButton) {
-    installCursorIntegrationButton.disabled = isBusy;
+function setControlDisabled(element, disabled) {
+  if (element) {
+    element.disabled = disabled;
   }
-  removeIntegrationButton.disabled = isBusy;
-  prepareUninstallButton.disabled = isBusy;
-  refreshDiagnosticsButton.disabled = isBusy;
-  copyDiagnosticsButton.disabled = isBusy;
-  openAppLogButton.disabled = isBusy;
-  portInput.disabled = isBusy;
-  codexManualPathsInput.disabled = isBusy;
-  alwaysOnTopCheckbox.disabled = isBusy;
-  notificationsEnabledCheckbox.disabled = isBusy;
-  notifyWaitingCheckbox.disabled = isBusy;
-  notifyDoneCheckbox.disabled = isBusy;
+}
+
+function setBusy(isBusy) {
+  setControlDisabled(saveButton, isBusy);
+  setControlDisabled(installIntegrationButton, isBusy);
+  setControlDisabled(installCursorIntegrationButton, isBusy);
+  setControlDisabled(removeIntegrationButton, isBusy);
+  setControlDisabled(prepareUninstallButton, isBusy);
+  setControlDisabled(refreshDiagnosticsButton, isBusy);
+  setControlDisabled(copyDiagnosticsButton, isBusy);
+  setControlDisabled(openAppLogButton, isBusy);
+  setControlDisabled(portInput, isBusy);
+  setControlDisabled(codexManualPathsInput, isBusy);
+  setControlDisabled(alwaysOnTopCheckbox, isBusy);
+  setControlDisabled(notificationsEnabledCheckbox, isBusy);
+  setControlDisabled(notifyWaitingCheckbox, isBusy);
+  setControlDisabled(notifyDoneCheckbox, isBusy);
+  setControlDisabled(originAliasesInput, isBusy);
+  setControlDisabled(remoteCodexViaSshCheckbox, isBusy);
+  setControlDisabled(addSshTargetButton, isBusy);
+  setControlDisabled(refreshRemoteButton, isBusy);
+  setControlDisabled(copyInstallCommandButton, isBusy);
+  setControlDisabled(copySshCommandButton, isBusy);
+  setControlDisabled(regenerateTokenButton, isBusy);
+  setControlDisabled(checkUpdateButton, isBusy);
+
   document.querySelectorAll('input[name="display-mode"]').forEach((input) => {
     input.disabled = isBusy;
   });
   document.querySelectorAll('input[name="http-bind"]').forEach((input) => {
     input.disabled = isBusy;
   });
-  originAliasesInput.disabled = isBusy;
-  remoteCodexViaSshCheckbox.disabled = isBusy;
-  addSshTargetButton.disabled = isBusy;
-  sshTargetsListEl.querySelectorAll("input, button").forEach((element) => {
+  sshTargetsListEl?.querySelectorAll("input, button").forEach((element) => {
     element.disabled = isBusy;
   });
-  refreshRemoteButton.disabled = isBusy;
-  copyInstallCommandButton.disabled = isBusy;
-  copySshCommandButton.disabled = isBusy;
-  regenerateTokenButton.disabled = isBusy;
-  testSshButton.disabled = isBusy;
-  checkUpdateButton.disabled = isBusy;
-  installUpdateButton.disabled = isBusy || !pendingUpdate;
+
+  if (installUpdateButton) {
+    installUpdateButton.disabled = isBusy || !pendingUpdate;
+  }
 }
 
 function setStatus(message, isError = false) {
-  statusEl.textContent = message;
+  if (!statusEl) return;
+  statusEl.textContent = message || "";
   statusEl.classList.toggle("error", isError);
+}
+
+function setUpdateStatus(message, ok) {
+  if (!updateStatusEl) return;
+  updateStatusEl.textContent = message || "";
+  updateStatusEl.classList.remove("ok", "error");
+  if (ok === true) updateStatusEl.classList.add("ok");
+  if (ok === false) updateStatusEl.classList.add("error");
 }

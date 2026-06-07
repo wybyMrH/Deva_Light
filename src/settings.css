@@ -644,8 +644,14 @@ button.wide {
 .inline-status {
   min-height: 18px;
   margin: 12px 0 0;
-  color: var(--text-muted);
+  color: #cbd5e1;
   font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.inline-status:empty {
+  display: none;
 }
 
 .inline-status.ok {
@@ -756,14 +762,26 @@ button.wide {
 }
 
 #status {
+  flex: 1;
   min-height: 18px;
   margin: 0;
-  color: #93c5fd;
+  color: #cbd5e1;
   font-size: 13px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+#status:empty::before {
+  content: "就绪";
+  color: #64748b;
 }
 
 #status.error {
   color: #fca5a5;
+}
+
+#status:not(:empty):not(.error) {
+  color: #93c5fd;
 }
 
 .footer-actions {

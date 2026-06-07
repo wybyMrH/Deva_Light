@@ -1,4 +1,4 @@
-use crate::logging::log_warn;
+use crate::logging::{log_info, log_warn};
 use serde::Serialize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -81,6 +81,7 @@ pub async fn check_for_update(app: &AppHandle) -> Result<Option<UpdateInfo>, Str
 }
 
 pub async fn download_and_install(app: &AppHandle) -> Result<(), String> {
+    log_info("updater", "starting download and install");
     let updater = build_updater(app)?;
     let Some(update) = updater
         .check()
@@ -89,6 +90,14 @@ pub async fn download_and_install(app: &AppHandle) -> Result<(), String> {
     else {
         return Err("当前已是最新版本".to_string());
     };
+
+    log_info(
+        "updater",
+        format!(
+            "downloading update {} (current {})",
+            update.version, app.package_info().version
+        ),
+    );
 
     let app_handle = app.clone();
     let downloaded = Arc::new(AtomicU64::new(0));
@@ -122,8 +131,13 @@ pub async fn download_and_install(app: &AppHandle) -> Result<(), String> {
             },
         )
         .await
-        .map_err(|error| map_update_error(&error.to_string()))?;
+        .map_err(|error| {
+            let message = map_update_error(&error.to_string());
+            log_warn("updater", format!("download/install failed: {message}"));
+            message
+        })?;
 
+    log_info("updater", "download/install finished, restarting app");
     app.restart();
 }
 
