@@ -407,13 +407,19 @@ function createProjectLight(lightState) {
         return;
       }
 
-      if (status === "Waiting" || status === "Done") {
+      if (
+        (status === "Waiting" || status === "Done") &&
+        event.target.closest(".lamp.on")
+      ) {
         safeInvoke("confirm_light", { projectId });
       }
       return;
     }
 
-    if (status === "Waiting" || status === "Done") {
+    if (
+      (status === "Waiting" || status === "Done") &&
+      event.target.closest(".lamp.on")
+    ) {
       safeInvoke("confirm_light", { projectId });
     }
   });
@@ -616,10 +622,14 @@ function toolMeta(tool) {
 
 function tooltipFor(lightState) {
   const origin = lightState.monitor_origin || lightState.monitorOrigin;
+  const status = lightState.status || "Idle";
   const parts = [
     lightState.project_label || lightState.project_id,
     origin ? `来源: ${origin}` : null,
-    lightState.status || "Idle",
+    status,
+    status === "Waiting" || status === "Done"
+      ? "点击亮起的黄/红灯确认已处理"
+      : null,
   ].filter(Boolean);
 
   if (lightState.last_tool_call) {

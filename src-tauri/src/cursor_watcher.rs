@@ -10,6 +10,7 @@ use std::thread;
 use std::time::{Duration, SystemTime};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
+const RESTORE_IF_ACTIVE_WITHIN: Duration = Duration::from_secs(3 * 60);
 const STALE_WORKING_AFTER: Duration = Duration::from_secs(10 * 60);
 const REMOVE_INACTIVE_AFTER: Duration = Duration::from_secs(15 * 60);
 
@@ -63,7 +64,7 @@ fn run_cursor_watcher(aggregator: Arc<StateAggregator>) {
                     continue;
                 }
 
-                if is_recently_active(entry.last_activity_at, now) {
+                if is_recently_active(entry.last_activity_at, now, RESTORE_IF_ACTIVE_WITHIN) {
                     log_info(
                         "cursor_watcher",
                         format!(
@@ -178,7 +179,7 @@ fn scan_cursor_sessions(projects_dir: &Path) -> Result<Vec<CursorSessionEntry>, 
                 continue;
             };
 
-            let Some(last_activity_at) = latest_mtime_in_dir(&session_path) else {
+            let Some(last_activity_at) = transcript_jsonl_mtime(&session_path) else {
                 continue;
             };
 
@@ -193,49 +194,21 @@ fn scan_cursor_sessions(projects_dir: &Path) -> Result<Vec<CursorSessionEntry>, 
     Ok(results)
 }
 
-fn latest_mtime_in_dir(dir: &Path) -> Option<SystemTime> {
-    let mut latest: Option<SystemTime> = None;
-
-    let mut update = |path: &Path| {
-        if let Ok(metadata) = fs::metadata(path) {
-            if let Ok(modified) = metadata.modified() {
-                latest = Some(match latest {
-                    Some(current) => current.max(modified),
-                    None => modified,
-                });
-            }
-        }
-    };
-
-    update(dir);
-
-    let transcript_file = dir.join(format!(
-        "{}.jsonl",
-        dir.file_name().and_then(|name| name.to_str()).unwrap_or("")
-    ));
-    update(&transcript_file);
-
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_file() {
-                update(&path);
-            } else if path.is_dir() {
-                if let Ok(sub_entries) = fs::read_dir(&path) {
-                    for sub_entry in sub_entries.flatten() {
-                        update(&sub_entry.path());
-                    }
-                }
-            }
-        }
-    }
-
-    latest
+fn transcript_jsonl_mtime(session_path: &Path) -> Option<SystemTime> {
+    let session_id = session_path.file_name()?.to_str()?;
+    fs::metadata(session_path.join(format!("{session_id}.jsonl")))
+        .ok()?
+        .modified()
+        .ok()
 }
 
-fn is_recently_active(last_activity_at: SystemTime, now: SystemTime) -> bool {
+fn is_recently_active(
+    last_activity_at: SystemTime,
+    now: SystemTime,
+    window: Duration,
+) -> bool {
     now.duration_since(last_activity_at)
-        .map(|elapsed| elapsed < REMOVE_INACTIVE_AFTER)
+        .map(|elapsed| elapsed < window)
         .unwrap_or(false)
 }
 
