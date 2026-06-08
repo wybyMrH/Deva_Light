@@ -23,7 +23,6 @@ struct ClaudeSessionFile {
 #[derive(Debug, Clone)]
 struct TrackedSession {
     session_id: String,
-    cwd: PathBuf,
     pid: i32,
     file_name: String,
 }
@@ -106,7 +105,6 @@ fn run_claude_watcher(aggregator: Arc<StateAggregator>) {
                         session.session_id.clone(),
                         TrackedSession {
                             session_id: session.session_id.clone(),
-                            cwd: PathBuf::from(&session.cwd),
                             pid: session.pid,
                             file_name: file_name.clone(),
                         },
@@ -114,7 +112,7 @@ fn run_claude_watcher(aggregator: Arc<StateAggregator>) {
                 }
             }
 
-            for (session_id, _) in &previous_session_files {
+            for session_id in previous_session_files.keys() {
                 if current_session_files.contains_key(session_id) {
                     continue;
                 }
@@ -191,7 +189,7 @@ fn scan_session_files(dir: &Path) -> Result<Vec<(String, ClaudeSessionFile)>, st
         let entry = entry?;
         let path = entry.path();
 
-        if !path.extension().is_some_and(|ext| ext == "json") {
+        if path.extension().is_none_or(|ext| ext != "json") {
             continue;
         }
 

@@ -196,7 +196,16 @@ fn resolve_tool_call(payload: &serde_json::Value) -> Option<String> {
 fn resolve_task_hint(payload: &serde_json::Value) -> Option<String> {
     extract_string(
         payload,
-        &["prompt", "task", "user_prompt", "message", "description"],
+        &[
+            "prompt",
+            "task",
+            "user_prompt",
+            "message",
+            "description",
+            "error",
+            "reason",
+            "details",
+        ],
     )
 }
 
@@ -219,6 +228,13 @@ fn normalize_event_type(event_type: &str) -> String {
         "Notification" | "notification" => "notification",
         "Stop" | "stop" => "stop",
         "SessionEnd" | "session_end" | "sessionend" | "sessionEnd" => "session-end",
+        "Error" | "error" => "error",
+        "StreamError" | "stream_error" | "stream-error" | "streamError" => "stream-error",
+        "ConnectionError" | "connection_error" | "connection-error" | "connectionError" => {
+            "connection-error"
+        }
+        "RetryError" | "retry_error" | "retry-error" | "retryError" => "retry-error",
+        "TurnAborted" | "turn_aborted" | "turn-aborted" | "turnAborted" => "turn-aborted",
         // Cursor-specific
         "beforeSubmitPrompt" | "before-submit-prompt" => "before-submit-prompt",
         "postToolUseFailure" | "post-tool-use-failure" => "post-tool-use-failure",

@@ -188,6 +188,12 @@ body {
   border-color: rgba(34, 197, 94, 0.85);
 }
 
+.tool-chip.status-error {
+  border-color: rgba(248, 113, 113, 0.95);
+  box-shadow: 0 0 7px rgba(248, 113, 113, 0.65);
+  animation: error-chip-flash 1.15s ease-in-out infinite;
+}
+
 .tool-chip.status-done,
 .tool-chip.status-idle {
   opacity: 0.72;
@@ -290,6 +296,10 @@ body {
   background: radial-gradient(circle at 34% 30%, #fecaca, #ef4444 45%, #7f1d1d);
   box-shadow: 0 0 22px rgba(239, 68, 68, 0.85);
   opacity: 1;
+}
+
+.traffic-light.status-error .lamp.red.on {
+  animation: error-red-flash 1.15s ease-in-out infinite;
 }
 
 .lamp.yellow.on {
@@ -413,9 +423,45 @@ body {
   }
 }
 
+@keyframes error-red-flash {
+  0%,
+  100% {
+    opacity: 0.72;
+    box-shadow:
+      0 0 10px rgba(248, 113, 113, 0.45),
+      0 0 18px rgba(248, 113, 113, 0.24);
+    filter: brightness(0.88);
+    transform: scale(0.96);
+  }
+
+  48% {
+    opacity: 1;
+    box-shadow:
+      0 0 24px rgba(248, 113, 113, 0.95),
+      0 0 44px rgba(239, 68, 68, 0.58);
+    filter: brightness(1.18);
+    transform: scale(1.04);
+  }
+}
+
+@keyframes error-chip-flash {
+  0%,
+  100% {
+    box-shadow: 0 0 4px rgba(248, 113, 113, 0.42);
+    opacity: 0.78;
+  }
+
+  50% {
+    box-shadow: 0 0 11px rgba(248, 113, 113, 0.9);
+    opacity: 1;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .lamp.yellow.on,
-  .tool-chip.status-waiting {
+  .tool-chip.status-waiting,
+  .traffic-light.status-error .lamp.red.on,
+  .tool-chip.status-error {
     animation: none;
     opacity: 1;
   }

@@ -81,6 +81,10 @@
   background: rgba(70, 70, 70, 0.7);
 }
 
+.session-row.has-pending-action {
+  align-items: flex-start;
+}
+
 /* Status Indicator */
 .session-status {
   font-size: 14px;
@@ -93,6 +97,11 @@
 
 .status-waiting {
   color: #ff9f0a;
+}
+
+.status-error {
+  color: #ff6b6b;
+  font-weight: 800;
 }
 
 .status-done {
@@ -121,6 +130,29 @@
 .session-tool {
   font-size: 10px;
   color: #888;
+}
+
+.pending-action-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 2px;
+  min-width: 0;
+}
+
+.pending-action-title {
+  color: #d8d8d8;
+  font-size: 10px;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pending-action-decisions {
+  color: #ffb347;
+  font-size: 10px;
+  line-height: 1.3;
 }
 
 /* Badge for session count */

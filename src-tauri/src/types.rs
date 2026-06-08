@@ -1,3 +1,4 @@
+use crate::agent_event::PendingActionSummary;
 use crate::monitor_origin::MonitorOrigin;
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
@@ -7,6 +8,7 @@ use std::time::Instant;
 /// Semantic mapping (unified with claude-code-traffic-light convention):
 /// - Working: 🟢 Green - AI is actively processing (prompt-submit, pre-tool-use, post-tool-use)
 /// - Waiting: 🟡 Yellow - Waiting for user action (permission-request, notification)
+/// - Error: 🔴 Flashing red - Session hit an error, failed retry, auth/network problem, etc.
 /// - Done: 🔴 Red - Session ended or task complete (stop, session-end)
 /// - Idle: 🔴 Red - Session started but not yet active
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -15,6 +17,7 @@ pub enum Status {
     Done = 1,    // Red - session ended / task complete
     Working = 2, // Green - AI is actively working
     Waiting = 3, // Yellow - needs user attention (permission, notification)
+    Error = 4,   // Flashing red - error / failed retry / auth or network problem
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -42,6 +45,12 @@ pub struct SessionRef {
     /// Human-readable task name (from Codex prompt or Claude context)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task_name: Option<String>,
+    /// Human-readable error summary shown while the session is in Error.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<String>,
+    /// Lightweight waiting/action summary safe to send to the frontend.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pending_action: Option<PendingActionSummary>,
     /// Monitor environment (local / WSL / SSH / remote LAN)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub monitor_origin: Option<MonitorOrigin>,
@@ -67,6 +76,8 @@ pub struct LightState {
     #[serde(skip)]
     pub last_event_at: Instant,
     pub last_tool_call: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
 }
 
 impl LightState {
@@ -91,6 +102,7 @@ impl LightState {
             workspace_path: None,
             last_event_at: Instant::now(),
             last_tool_call: None,
+            last_error: None,
         }
     }
 
@@ -110,7 +122,7 @@ impl LightState {
         self.sessions.iter().any(|session| {
             matches!(
                 session.status,
-                Status::Working | Status::Waiting | Status::Done
+                Status::Working | Status::Waiting | Status::Done | Status::Error
             )
         })
     }

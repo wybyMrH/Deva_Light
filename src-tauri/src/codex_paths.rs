@@ -164,15 +164,10 @@ fn ssh_codex_root_is_accessible(path: &Path) -> bool {
         return false;
     };
 
-    ssh_command(
-        &target,
-        &format!(
-            "test -d {} && echo ok",
-            format!("'{}'", remote.replace('\'', "'\"'\"'"))
-        ),
-    )
-    .ok()
-    .as_deref()
+    let quoted_remote = format!("'{}'", remote.replace('\'', "'\"'\"'"));
+    ssh_command(&target, &format!("test -d {quoted_remote} && echo ok"))
+        .ok()
+        .as_deref()
         == Some("ok")
 }
 
@@ -344,7 +339,7 @@ fn decode_console_text(bytes: &[u8]) -> String {
 #[cfg(any(test, target_os = "windows"))]
 fn looks_like_utf16le(bytes: &[u8]) -> bool {
     bytes.len() >= 2
-        && bytes.len() % 2 == 0
+        && bytes.len().is_multiple_of(2)
         && bytes.iter().skip(1).step_by(2).any(|byte| *byte == 0)
 }
 

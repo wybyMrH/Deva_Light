@@ -93,7 +93,7 @@ For macOS, the bundled hook binary should be `deva-light-hook` without the `.exe
 Run from the repository root on Windows:
 
 ```powershell
-$env:PATH = "C:\Users\kemp\.cargo\bin;$env:PATH"
+$env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
 cargo build -p deva-light-hook --release
 npx @tauri-apps/cli@2.11.2 build
 ```
@@ -109,7 +109,7 @@ target/release/bundle/nsis/Deva Light_0.1.0_x64-setup.exe
 Smoke test:
 
 ```powershell
-Start-Process -FilePath "N:\AI\ai_light\target\release\deva-light.exe" -WindowStyle Hidden
+Start-Process -FilePath ".\target\release\deva-light.exe" -WindowStyle Hidden
 Start-Sleep -Seconds 2
 $runtime = Get-Content "$env:USERPROFILE\.deva_light\runtime.json" | ConvertFrom-Json
 Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:$($runtime.http_port)/health" |

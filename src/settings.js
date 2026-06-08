@@ -1121,6 +1121,9 @@ function diagnosticsText(diagnostics) {
   const codexManualPaths = Array.isArray(diagnostics.codexManualPaths)
     ? diagnostics.codexManualPaths
     : [];
+  const providerCapabilities = Array.isArray(diagnostics.providerCapabilities)
+    ? diagnostics.providerCapabilities
+    : [];
 
   return [
     "Deva Light 诊断信息",
@@ -1142,10 +1145,23 @@ function diagnosticsText(diagnostics) {
     `钩子程序存在: ${diagnostics.hookBinaryExists}`,
     `运行时存在: ${diagnostics.runtimeExists}`,
     `灯组数量: ${diagnostics.lightCount}`,
+    "Provider 能力:",
+    ...(providerCapabilities.length
+      ? providerCapabilities.map(formatProviderCapability)
+      : ["  - (无)"]),
     "",
     "最近日志:",
     diagnostics.recentLog || "(空)",
   ].join("\n");
+}
+
+function formatProviderCapability(entry) {
+  const caps = entry.capabilities || {};
+  const enabled = Object.entries(caps)
+    .filter(([, value]) => value === true)
+    .map(([key]) => key)
+    .join(", ");
+  return `  - ${entry.provider}: ${enabled || "none"}`;
 }
 
 function setControlDisabled(element, disabled) {

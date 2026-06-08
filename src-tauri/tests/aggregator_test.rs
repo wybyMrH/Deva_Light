@@ -102,11 +102,57 @@ fn aggregates_across_tools_by_severity() {
 
     agg.add_session("s1".to_string(), Tool::ClaudeCode, &cwd, Status::Working);
     agg.add_session("s2".to_string(), Tool::Codex, &cwd, Status::Waiting);
+    agg.add_session("s3".to_string(), Tool::Cursor, &cwd, Status::Error);
 
     let lights = agg.get_lights();
     assert_eq!(lights.len(), 1);
-    assert_eq!(lights[0].status, Status::Waiting);
-    assert_eq!(lights[0].sessions.len(), 2);
+    assert_eq!(lights[0].status, Status::Error);
+    assert_eq!(lights[0].sessions.len(), 3);
+}
+
+#[test]
+fn error_light_is_not_pruned_as_done() {
+    let agg = StateAggregator::new();
+    let cwd = PathBuf::from("/home/user/project");
+
+    agg.add_session("s1".to_string(), Tool::Codex, &cwd, Status::Error);
+    agg.set_error_message("s1", "unexpected status 502 Bad Gateway".to_string());
+
+    assert!(!agg.prune_expired_done_lights(Duration::ZERO));
+    let lights = agg.get_lights();
+    assert_eq!(lights.len(), 1);
+    assert_eq!(lights[0].status, Status::Error);
+    assert_eq!(
+        lights[0].sessions[0].error_message.as_deref(),
+        Some("unexpected status 502 Bad Gateway")
+    );
+}
+
+#[test]
+fn automatic_status_updates_do_not_overwrite_error() {
+    let agg = StateAggregator::new();
+    let cwd = PathBuf::from("/home/user/project");
+
+    agg.add_session("s1".to_string(), Tool::Codex, &cwd, Status::Working);
+    agg.update_session_status("s1", Status::Error);
+    agg.update_session_status("s1", Status::Working);
+    agg.update_session_status("s1", Status::Waiting);
+    agg.update_session_status("s1", Status::Done);
+
+    assert_eq!(agg.session_status("s1"), Some(Status::Error));
+    assert_eq!(agg.get_lights()[0].status, Status::Error);
+}
+
+#[test]
+fn confirming_error_session_removes_tracking() {
+    let agg = StateAggregator::new();
+    let cwd = PathBuf::from("/home/user/project");
+
+    agg.add_session("s1".to_string(), Tool::Codex, &cwd, Status::Error);
+    agg.confirm_session("s1");
+
+    assert!(agg.get_lights().is_empty());
+    assert_eq!(agg.session_status("s1"), None);
 }
 
 #[test]

@@ -341,11 +341,6 @@ fn discover_wsl_ssh_dirs() -> Vec<(String, PathBuf)> {
     dirs
 }
 
-#[cfg(not(target_os = "windows"))]
-fn discover_wsl_ssh_dirs() -> Vec<(String, PathBuf)> {
-    Vec::new()
-}
-
 #[cfg(target_os = "windows")]
 fn wsl_ssh_dir_for_distro(distro: &str) -> Option<PathBuf> {
     const COMMAND: &str = r#"wslpath -w "$HOME/.ssh""#;

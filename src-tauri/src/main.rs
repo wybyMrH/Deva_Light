@@ -169,6 +169,7 @@ fn main() {
 
                     let should_notify = match light.status {
                         Status::Waiting => config.notify_on_waiting,
+                        Status::Error => config.notify_on_waiting,
                         Status::Done => config.notify_on_done,
                         _ => false,
                     };
@@ -180,6 +181,7 @@ fn main() {
                     let title = format!("Deva Light - {}", light.project_label);
                     let body = match light.status {
                         Status::Waiting => "AI 需要您的关注".to_string(),
+                        Status::Error => "AI 任务出现错误".to_string(),
                         Status::Done => "任务已完成".to_string(),
                         _ => String::new(),
                     };
@@ -204,7 +206,7 @@ fn main() {
 
             http_server
                 .start(Arc::clone(&aggregator), &app_config)
-                .map_err(|error| std::io::Error::other(error))?;
+                .map_err(std::io::Error::other)?;
             deva_light::codex_watcher::start_codex_watcher(Arc::clone(&aggregator))?;
             deva_light::claude_watcher::start_claude_watcher(Arc::clone(&aggregator));
             deva_light::cursor_watcher::start_cursor_watcher(Arc::clone(&aggregator));

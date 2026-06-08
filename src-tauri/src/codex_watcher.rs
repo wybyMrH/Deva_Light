@@ -1,9 +1,13 @@
+use crate::agent_event::{
+    AgentEvent, PendingActionKind, PendingActionSummary, ProviderId, UserDecisionKind,
+};
 use crate::aggregator::StateAggregator;
 use crate::codex_paths::{
     auto_codex_sessions_dirs, codex_session_root_summary_for_auto, is_wsl_unc_path,
     CodexSessionRootSummary,
 };
 use crate::config::load_app_config;
+use crate::error_detection::text_looks_like_error;
 use crate::logging::{log_error, log_info, log_warn};
 use crate::monitoring::is_monitoring_paused;
 use crate::ssh_remote::{is_ssh_virtual_path, read_rollout_from_offset, rollout_modified};
@@ -33,6 +37,7 @@ pub enum CodexLineEvent {
     SessionMeta(CodexSessionMeta),
     Status(Status),
     ToolCall { name: String, status: Status },
+    Error { message: Option<String> },
     Ignore,
 }
 
@@ -252,6 +257,7 @@ fn initialize_existing_rollout(
     let mut reader = BufReader::new(file);
     let mut line = String::new();
     let mut last_tool_call = None;
+    let mut last_error_message = None;
 
     loop {
         line.clear();
@@ -267,6 +273,10 @@ fn initialize_existing_rollout(
                 watched.last_status = Some(status);
                 last_tool_call = Some(name);
             }
+            Ok(CodexLineEvent::Error { message }) => {
+                watched.last_status = Some(Status::Error);
+                last_error_message = message;
+            }
             Ok(CodexLineEvent::Ignore) => {}
             Err(error) => log_watcher_error(&format!("parse {}", path.display()), &error),
         }
@@ -274,7 +284,13 @@ fn initialize_existing_rollout(
 
     watched.offset = reader.stream_position()?;
     watched.last_activity_at = rollout_modified_at(path).unwrap_or_else(|_| SystemTime::now());
-    restore_existing_rollout(aggregator, path, watched, last_tool_call)?;
+    restore_existing_rollout(
+        aggregator,
+        path,
+        watched,
+        last_tool_call,
+        last_error_message,
+    )?;
     Ok(())
 }
 
@@ -283,6 +299,7 @@ fn restore_existing_rollout(
     path: &Path,
     watched: &mut WatchedRollout,
     last_tool_call: Option<String>,
+    last_error_message: Option<String>,
 ) -> io::Result<()> {
     let Some(meta) = watched.meta.clone() else {
         return Ok(());
@@ -294,6 +311,34 @@ fn restore_existing_rollout(
     };
 
     let status = watched.last_status.unwrap_or(Status::Idle);
+
+    if status == Status::Error {
+        if age >= REMOVE_INACTIVE_AFTER {
+            return Ok(());
+        }
+
+        aggregator.add_session_with_context(
+            meta.session_id.clone(),
+            Tool::Codex,
+            &meta.cwd,
+            status,
+            Some(path),
+        );
+        if let Some(message) = last_error_message {
+            aggregator.set_error_message(&meta.session_id, message);
+        }
+
+        watched.added_to_aggregator = true;
+        watched.last_status = Some(status);
+        watched.last_activity_at = SystemTime::now();
+        log_watcher_note(&format!(
+            "restored session {} from {} with status {}",
+            meta.session_id,
+            path.display(),
+            status_name(status)
+        ));
+        return Ok(());
+    }
 
     // Only restore rollouts that were actively working right before restart.
     // Older files produce false yellow lights after Deva Light relaunches.
@@ -401,8 +446,22 @@ fn apply_codex_event(
         CodexLineEvent::ToolCall { name, status } => {
             if let Some(meta) = watched.meta.clone() {
                 apply_status_event(aggregator, watched, status, rollout_path);
-                aggregator.set_last_tool_call(&meta.session_id, name.clone());
+                let mut event = AgentEvent::new(
+                    ProviderId::Codex,
+                    meta.session_id.clone(),
+                    "codex-tool-call",
+                );
+                event.tool_name = Some(name.clone());
+                event.pending_action = codex_pending_action(&meta.session_id, &name, status);
+                aggregator.apply_agent_event(event);
                 log_watcher_note(&format!("session {} tool {}", meta.session_id, name));
+            }
+            watched.last_activity_at = SystemTime::now();
+        }
+        CodexLineEvent::Error { message } => {
+            apply_status_event(aggregator, watched, Status::Error, rollout_path);
+            if let (Some(meta), Some(message)) = (watched.meta.as_ref(), message) {
+                aggregator.set_error_message(&meta.session_id, message);
             }
             watched.last_activity_at = SystemTime::now();
         }
@@ -426,6 +485,17 @@ fn update_inactive_session(
 
     if watched.last_status == Some(Status::Working) && age >= STALE_WORKING_AFTER {
         aggregator.update_session_status(&meta.session_id, Status::Waiting);
+        aggregator.set_pending_action(
+            &meta.session_id,
+            PendingActionSummary::new(
+                ProviderId::Codex,
+                &meta.session_id,
+                PendingActionKind::StaleSession,
+                "Codex 长时间无更新，请回到终端确认状态",
+                vec![UserDecisionKind::OpenProvider, UserDecisionKind::Dismiss],
+                120_000,
+            ),
+        );
         watched.last_status = Some(Status::Waiting);
         watched.last_activity_at = SystemTime::now();
         log_watcher_note(&format!(
@@ -439,7 +509,9 @@ fn update_inactive_session(
         return Ok(());
     };
 
-    if inactive_for >= REMOVE_INACTIVE_AFTER && watched.last_status != Some(Status::Working) {
+    if inactive_for >= REMOVE_INACTIVE_AFTER
+        && !matches!(watched.last_status, Some(Status::Working | Status::Error))
+    {
         aggregator.remove_session(&meta.session_id);
         watched.added_to_aggregator = false;
         watched.last_status = None;
@@ -452,6 +524,37 @@ fn update_inactive_session(
     }
 
     Ok(())
+}
+
+fn codex_pending_action(
+    session_id: &str,
+    tool_name: &str,
+    status: Status,
+) -> Option<PendingActionSummary> {
+    if status != Status::Waiting {
+        return None;
+    }
+
+    let (kind, title) = if tool_name == "request_user_input" {
+        (
+            PendingActionKind::UserQuestion,
+            "Codex 等待用户输入，请回到终端处理".to_string(),
+        )
+    } else {
+        (
+            PendingActionKind::ToolApproval,
+            format!("Codex 等待工具权限：{tool_name}"),
+        )
+    };
+
+    Some(PendingActionSummary::new(
+        ProviderId::Codex,
+        session_id,
+        kind,
+        title,
+        vec![UserDecisionKind::OpenProvider, UserDecisionKind::Dismiss],
+        120_000,
+    ))
 }
 
 fn remove_missing_rollout(aggregator: &StateAggregator, path: &Path, watched: WatchedRollout) {
@@ -482,9 +585,22 @@ fn apply_status_event(
         return;
     };
 
+    let current_status = aggregator.session_status(&meta.session_id);
+    if watched.last_status == Some(Status::Error)
+        && current_status.is_some()
+        && status != Status::Error
+    {
+        watched.last_activity_at = SystemTime::now();
+        log_watcher_note(&format!(
+            "kept session {} in error state; ignored automatic {} transition",
+            meta.session_id,
+            status_name(status)
+        ));
+        return;
+    }
+
     let status_changed = watched.last_status != Some(status);
-    let still_tracked =
-        watched.added_to_aggregator && aggregator.session_status(&meta.session_id).is_some();
+    let still_tracked = watched.added_to_aggregator && current_status.is_some();
 
     if still_tracked {
         aggregator.update_session_status(&meta.session_id, status);
@@ -556,9 +672,16 @@ pub fn parse_codex_line(line: &str) -> serde_json::Result<CodexLineEvent> {
                 | "patch_apply_end" | "exec_command_begin" | "exec_command_end"
                 | "web_search_begin" | "web_search_end" => CodexLineEvent::Status(Status::Working),
                 "task_complete" => CodexLineEvent::Status(Status::Done),
-                "error" | "stream_error" | "turn_aborted" => {
-                    CodexLineEvent::Status(Status::Waiting)
-                }
+                "notification" => match payload_error_signal(payload) {
+                    Some(message) => CodexLineEvent::Error {
+                        message: Some(message),
+                    },
+                    None => CodexLineEvent::Status(Status::Waiting),
+                },
+                event_type if codex_event_type_is_error(event_type) => CodexLineEvent::Error {
+                    message: payload_error_message(payload)
+                        .or_else(|| Some(event_type.replace('_', "-"))),
+                },
                 _ => CodexLineEvent::Ignore,
             })
         }
@@ -567,6 +690,13 @@ pub fn parse_codex_line(line: &str) -> serde_json::Result<CodexLineEvent> {
                 .get("type")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
+
+            if codex_response_item_type_is_error(payload_type) {
+                return Ok(CodexLineEvent::Error {
+                    message: payload_error_message(payload)
+                        .or_else(|| Some(payload_type.replace('_', "-"))),
+                });
+            }
 
             if matches!(
                 payload_type,
@@ -600,12 +730,59 @@ pub fn parse_codex_line(line: &str) -> serde_json::Result<CodexLineEvent> {
     }
 }
 
+fn codex_event_type_is_error(event_type: &str) -> bool {
+    let normalized = event_type.replace('-', "_");
+    matches!(
+        normalized.as_str(),
+        "error"
+            | "stream_error"
+            | "connection_error"
+            | "retry_error"
+            | "post_tool_use_failure"
+            | "turn_aborted"
+    )
+}
+
+fn codex_response_item_type_is_error(payload_type: &str) -> bool {
+    let normalized = payload_type.replace('-', "_");
+    matches!(
+        normalized.as_str(),
+        "error" | "stream_error" | "connection_error" | "retry_error"
+    )
+}
+
 fn status_for_tool_call_payload(tool_call: &str, payload: &Value) -> Status {
     match tool_call {
         "request_user_input" => Status::Waiting,
         _ if tool_call_requires_confirmation(payload) => Status::Waiting,
         _ => Status::Working,
     }
+}
+
+fn payload_error_signal(payload: &Value) -> Option<String> {
+    payload_error_message(payload).filter(|message| text_looks_like_error(message))
+}
+
+fn payload_error_message(payload: &Value) -> Option<String> {
+    for key in ["message", "error", "reason", "details", "stderr"] {
+        let Some(value) = payload.get(key) else {
+            continue;
+        };
+
+        if let Some(text) = value
+            .as_str()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+        {
+            return Some(text.to_string());
+        }
+
+        if !value.is_null() {
+            return Some(value.to_string());
+        }
+    }
+
+    None
 }
 
 fn tool_call_requires_confirmation(payload: &Value) -> bool {
@@ -625,7 +802,7 @@ fn tool_call_requires_confirmation(payload: &Value) -> bool {
 
 fn rollout_modified_at(path: &Path) -> io::Result<SystemTime> {
     if is_ssh_virtual_path(path) {
-        rollout_modified(path).map_err(|error| io::Error::new(io::ErrorKind::Other, error))
+        rollout_modified(path).map_err(io::Error::other)
     } else {
         fs::metadata(path)?.modified()
     }
@@ -636,9 +813,9 @@ fn initialize_existing_rollout_ssh(
     path: &Path,
     watched: &mut WatchedRollout,
 ) -> io::Result<()> {
-    let (content, new_offset) = read_rollout_from_offset(path, 0)
-        .map_err(|error| io::Error::new(io::ErrorKind::Other, error))?;
+    let (content, new_offset) = read_rollout_from_offset(path, 0).map_err(io::Error::other)?;
     let mut last_tool_call = None;
+    let mut last_error_message = None;
 
     for line in content.lines() {
         match parse_codex_line(line) {
@@ -648,6 +825,10 @@ fn initialize_existing_rollout_ssh(
                 watched.last_status = Some(status);
                 last_tool_call = Some(name);
             }
+            Ok(CodexLineEvent::Error { message }) => {
+                watched.last_status = Some(Status::Error);
+                last_error_message = message;
+            }
             Ok(CodexLineEvent::Ignore) => {}
             Err(error) => log_watcher_error(&format!("parse {}", path.display()), &error),
         }
@@ -655,7 +836,13 @@ fn initialize_existing_rollout_ssh(
 
     watched.offset = new_offset;
     watched.last_activity_at = rollout_modified_at(path).unwrap_or_else(|_| SystemTime::now());
-    restore_existing_rollout(aggregator, path, watched, last_tool_call)
+    restore_existing_rollout(
+        aggregator,
+        path,
+        watched,
+        last_tool_call,
+        last_error_message,
+    )
 }
 
 fn process_new_lines_ssh(
@@ -667,8 +854,8 @@ fn process_new_lines_ssh(
         return Ok(());
     };
 
-    let (chunk, new_offset) = read_rollout_from_offset(path, watched.offset)
-        .map_err(|error| io::Error::new(io::ErrorKind::Other, error))?;
+    let (chunk, new_offset) =
+        read_rollout_from_offset(path, watched.offset).map_err(io::Error::other)?;
 
     if chunk.is_empty() {
         return Ok(());
@@ -702,8 +889,7 @@ fn find_rollout_files(
     baseline: bool,
 ) -> io::Result<Vec<PathBuf>> {
     if is_ssh_virtual_path(root) {
-        return crate::ssh_remote::list_rollout_files(root)
-            .map_err(|error| io::Error::new(io::ErrorKind::Other, error));
+        return crate::ssh_remote::list_rollout_files(root).map_err(io::Error::other);
     }
 
     let mut files = Vec::new();
@@ -775,6 +961,7 @@ fn status_name(status: Status) -> &'static str {
         Status::Done => "done",
         Status::Working => "working",
         Status::Waiting => "waiting",
+        Status::Error => "error",
     }
 }
 
@@ -824,8 +1011,50 @@ mod tests {
             CodexLineEvent::Status(Status::Done)
         );
         assert_eq!(
-            parse_codex_line(r#"{"type":"event_msg","payload":{"type":"stream_error"}}"#).unwrap(),
-            CodexLineEvent::Status(Status::Waiting)
+            parse_codex_line(
+                r#"{"type":"event_msg","payload":{"type":"stream_error","message":"unexpected status 502 Bad Gateway"}}"#,
+            )
+            .unwrap(),
+            CodexLineEvent::Error {
+                message: Some("unexpected status 502 Bad Gateway".to_string())
+            }
+        );
+        assert_eq!(
+            parse_codex_line(
+                r#"{"type":"event_msg","payload":{"type":"connection_error","message":"unexpected status 502 Bad Gateway: auth_not_found: no auth available, url: http://localhost:57289/v1/responses"}}"#,
+            )
+            .unwrap(),
+            CodexLineEvent::Error {
+                message: Some("unexpected status 502 Bad Gateway: auth_not_found: no auth available, url: http://localhost:57289/v1/responses".to_string())
+            }
+        );
+        assert_eq!(
+            parse_codex_line(
+                r#"{"type":"event_msg","payload":{"type":"retry_error","reason":"retry failed after gateway timeout 504"}}"#,
+            )
+            .unwrap(),
+            CodexLineEvent::Error {
+                message: Some("retry failed after gateway timeout 504".to_string())
+            }
+        );
+        assert_eq!(
+            parse_codex_line(
+                r#"{"type":"event_msg","payload":{"type":"notification","message":"unexpected status 502 Bad Gateway: auth_not_found: no auth available"}}"#,
+            )
+            .unwrap(),
+            CodexLineEvent::Error {
+                message: Some(
+                    "unexpected status 502 Bad Gateway: auth_not_found: no auth available"
+                        .to_string()
+                )
+            }
+        );
+        assert_eq!(
+            parse_codex_line(
+                r#"{"type":"event_msg","payload":{"type":"agent_message","message":"I fixed the 502 Bad Gateway handling."}}"#,
+            )
+            .unwrap(),
+            CodexLineEvent::Status(Status::Working)
         );
     }
 
@@ -896,6 +1125,13 @@ mod tests {
             .unwrap(),
             CodexLineEvent::Status(Status::Working)
         );
+        assert_eq!(
+            parse_codex_line(
+                r#"{"type":"response_item","payload":{"type":"function_call_output","call_id":"call_1","output":"search output mentions unexpected status 502 Bad Gateway while inspecting tests"}}"#,
+            )
+            .unwrap(),
+            CodexLineEvent::Status(Status::Working)
+        );
     }
 
     #[test]
@@ -953,6 +1189,48 @@ mod tests {
         assert_eq!(lights[0].status, Status::Done);
         assert!(aggregator.prune_expired_done_lights(Duration::ZERO));
         assert!(aggregator.get_lights().is_empty());
+
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn codex_error_session_stays_error_after_task_complete() {
+        let root = std::env::temp_dir().join(unique_name("ai-light-codex-root"));
+        let project = std::env::temp_dir().join(unique_name("ai-light-codex-project"));
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&project).unwrap();
+
+        let rollout = root.join("rollout-2026-05-31T00-00-00-s1.jsonl");
+        fs::write(
+            &rollout,
+            format!(
+                "{}\n{}\n{}\n{}\n",
+                json_line(
+                    "session_meta",
+                    &format!(r#"{{"id":"s1","cwd":"{}"}}"#, json_path(&project))
+                ),
+                json_line("event_msg", r#"{"type":"task_started"}"#),
+                json_line(
+                    "event_msg",
+                    r#"{"type":"connection_error","message":"unexpected status 502 Bad Gateway: auth_not_found: no auth available"}"#
+                ),
+                json_line("event_msg", r#"{"type":"task_complete"}"#)
+            ),
+        )
+        .unwrap();
+
+        let aggregator = StateAggregator::new();
+        let mut files = HashMap::new();
+        poll_rollout_root(&aggregator, &mut files, false, &root).unwrap();
+
+        let lights = aggregator.get_lights();
+        assert_eq!(lights.len(), 1);
+        assert_eq!(lights[0].status, Status::Error);
+        assert_eq!(
+            lights[0].sessions[0].error_message.as_deref(),
+            Some("unexpected status 502 Bad Gateway: auth_not_found: no auth available")
+        );
 
         let _ = fs::remove_dir_all(root);
         let _ = fs::remove_dir_all(project);
@@ -1041,6 +1319,13 @@ mod tests {
         assert_eq!(
             lights[0].last_tool_call.as_deref(),
             Some("request_user_input")
+        );
+        assert_eq!(
+            lights[0].sessions[0]
+                .pending_action
+                .as_ref()
+                .map(|action| action.kind),
+            Some(PendingActionKind::UserQuestion)
         );
 
         let _ = fs::remove_dir_all(root);

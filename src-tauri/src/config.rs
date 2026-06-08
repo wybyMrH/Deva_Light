@@ -4,20 +4,15 @@ use std::fs;
 use std::io;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum DisplayMode {
+    #[default]
     Parallel,
     Compact,
 }
 
-impl Default for DisplayMode {
-    fn default() -> Self {
-        Self::Parallel
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(default)]
 pub struct SshRemoteTarget {
     pub target: String,
@@ -63,17 +58,6 @@ impl SshRemoteTarget {
             label,
             passphrase,
         })
-    }
-}
-
-impl Default for SshRemoteTarget {
-    fn default() -> Self {
-        Self {
-            target: String::new(),
-            identity_file: None,
-            label: None,
-            passphrase: None,
-        }
     }
 }
 

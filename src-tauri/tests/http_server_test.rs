@@ -1,3 +1,4 @@
+use deva_light::agent_event::{PendingActionKind, ProviderId, UserDecisionKind};
 use deva_light::http_server::{parse_hook_event, HookEvent};
 use deva_light::types::Status;
 
@@ -60,6 +61,14 @@ fn map_hook_event_types_to_statuses() {
         Some(Status::Working)
     );
     assert_eq!(
+        HookEvent::event_type_to_status("post-tool-use-failure"),
+        Some(Status::Error)
+    );
+    assert_eq!(
+        HookEvent::event_type_to_status("stream-error"),
+        Some(Status::Error)
+    );
+    assert_eq!(
         HookEvent::event_type_to_status("notification"),
         Some(Status::Waiting)
     );
@@ -98,4 +107,37 @@ fn cursor_pre_tool_use_resolves_to_waiting() {
     .unwrap();
 
     assert_eq!(event.resolve_status(), Some(Status::Waiting));
+}
+
+#[test]
+fn permission_request_builds_pending_action_summary() {
+    let event = parse_hook_event(
+        r#"{"event_type":"permission-request","session_id":"s1","tool_call":"Bash","message":"允许执行 npm test 吗？"}"#,
+    )
+    .unwrap();
+
+    let agent_event = event.to_agent_event();
+    let pending = agent_event.pending_action.unwrap();
+
+    assert_eq!(agent_event.provider, ProviderId::ClaudeCode);
+    assert_eq!(pending.kind, PendingActionKind::PermissionRequest);
+    assert!(pending.title.contains("npm test"));
+    assert_eq!(
+        pending.decisions,
+        vec![UserDecisionKind::OpenProvider, UserDecisionKind::Dismiss]
+    );
+}
+
+#[test]
+fn error_notification_resolves_to_error() {
+    let event = parse_hook_event(
+        r#"{"event_type":"notification","session_id":"s1","message":"unexpected status 502 Bad Gateway: auth_not_found: no auth available"}"#,
+    )
+    .unwrap();
+
+    assert_eq!(event.resolve_status(), Some(Status::Error));
+    assert_eq!(
+        event.error_message().as_deref(),
+        Some("unexpected status 502 Bad Gateway: auth_not_found: no auth available")
+    );
 }

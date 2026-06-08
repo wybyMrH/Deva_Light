@@ -4,7 +4,7 @@ use deva_light::http_server::start_http_server;
 use deva_light::types::Status;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::PathBuf;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -99,6 +99,109 @@ fn orphan_hook_event_auto_creates_session() {
 }
 
 #[test]
+fn hook_error_notification_stays_error_after_stop() {
+    let config_dir = std::env::temp_dir().join(unique_name("deva-light-error-config"));
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::env::set_var("DEVA_LIGHT_CONFIG_DIR", &config_dir);
+
+    let project_dir = std::env::temp_dir().join(unique_name("deva-light-error-project"));
+    std::fs::create_dir_all(&project_dir).unwrap();
+
+    let aggregator = Arc::new(StateAggregator::new());
+    let port = start_http_server(Arc::clone(&aggregator), &AppConfig::default()).unwrap();
+
+    post_event(
+        port,
+        &format!(
+            r#"{{"event_type":"session-start","session_id":"s-error","cwd":"{}"}}"#,
+            json_path(&project_dir)
+        ),
+    );
+    post_event(
+        port,
+        r#"{"event_type":"notification","session_id":"s-error","message":"unexpected status 502 Bad Gateway: auth_not_found: no auth available"}"#,
+    );
+
+    eventually(|| {
+        let lights = aggregator.get_lights();
+        lights.len() == 1
+            && lights[0].status == Status::Error
+            && lights[0].sessions[0]
+                .error_message
+                .as_deref()
+                .is_some_and(|message| message.contains("502 Bad Gateway"))
+    });
+
+    post_event(port, r#"{"event_type":"stop","session_id":"s-error"}"#);
+
+    eventually(|| {
+        let lights = aggregator.get_lights();
+        lights.len() == 1 && lights[0].status == Status::Error
+    });
+
+    post_event(
+        port,
+        r#"{"event_type":"session-end","session_id":"s-error"}"#,
+    );
+
+    eventually(|| {
+        let lights = aggregator.get_lights();
+        lights.len() == 1 && lights[0].status == Status::Error
+    });
+
+    let _ = std::fs::remove_dir_all(project_dir);
+    let _ = std::fs::remove_dir_all(config_dir);
+    std::env::remove_var("DEVA_LIGHT_CONFIG_DIR");
+}
+
+#[test]
+fn hook_permission_request_exposes_pending_action_summary() {
+    let config_dir = std::env::temp_dir().join(unique_name("deva-light-pending-config"));
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::env::set_var("DEVA_LIGHT_CONFIG_DIR", &config_dir);
+
+    let project_dir = std::env::temp_dir().join(unique_name("deva-light-pending-project"));
+    std::fs::create_dir_all(&project_dir).unwrap();
+
+    let aggregator = Arc::new(StateAggregator::new());
+    let port = start_http_server(Arc::clone(&aggregator), &AppConfig::default()).unwrap();
+
+    post_event(
+        port,
+        &format!(
+            r#"{{"event_type":"permission-request","session_id":"s-pending","cwd":"{}","tool_call":"Bash","message":"允许执行 npm test 吗？"}}"#,
+            json_path(&project_dir)
+        ),
+    );
+
+    eventually(|| {
+        let lights = aggregator.get_lights();
+        lights.len() == 1
+            && lights[0].status == Status::Waiting
+            && lights[0].sessions[0]
+                .pending_action
+                .as_ref()
+                .is_some_and(|action| action.title.contains("npm test"))
+    });
+
+    post_event(
+        port,
+        r#"{"event_type":"post-tool-use","session_id":"s-pending","tool_call":"Bash"}"#,
+    );
+
+    eventually(|| {
+        let lights = aggregator.get_lights();
+        lights.len() == 1
+            && lights[0].status == Status::Working
+            && lights[0].sessions[0].pending_action.is_none()
+    });
+
+    let _ = std::fs::remove_dir_all(project_dir);
+    let _ = std::fs::remove_dir_all(config_dir);
+    std::env::remove_var("DEVA_LIGHT_CONFIG_DIR");
+}
+
+#[test]
 fn hook_http_server_respects_fixed_port_config() {
     let config_dir = std::env::temp_dir().join(unique_name("deva-light-fixed-port-config"));
     std::fs::create_dir_all(&config_dir).unwrap();
@@ -155,6 +258,6 @@ fn unique_name(prefix: &str) -> String {
     format!("{prefix}-{nanos}")
 }
 
-fn json_path(path: &PathBuf) -> String {
+fn json_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "\\\\")
 }

@@ -53,7 +53,7 @@ From a checkout of this repository on Ubuntu:
 Example:
 
 ```bash
-./scripts/install-ubuntu-hook.sh http://192.168.1.10:17321
+./scripts/install-ubuntu-hook.sh http://192.0.2.10:17321
 ```
 
 The script installs:

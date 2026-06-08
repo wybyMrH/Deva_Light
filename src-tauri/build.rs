@@ -2,7 +2,6 @@ use std::env;
 use std::fs;
 use std::io::Cursor;
 use std::path::Path;
-use std::time::SystemTime;
 
 fn main() {
     generate_icns_from_png();
@@ -68,5 +67,4 @@ fn is_up_to_date(source: &Path, destination: &Path) -> bool {
     };
 
     dest_modified >= source_modified
-        || dest_modified >= SystemTime::UNIX_EPOCH && source_modified <= dest_modified
 }

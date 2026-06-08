@@ -4,7 +4,7 @@
  * Shows individual session status when a project has multiple sessions.
  * Drawer expands to the right of the light group.
  *
- * Sorting: Waiting (yellow) > Working (green) > Done/Idle (red)
+ * Sorting: Error (flashing red) > Waiting (yellow) > Working (green) > Done/Idle (red)
  */
 
 let currentDrawerProjectId = null;
@@ -57,7 +57,7 @@ export function updateDrawer(drawerRoot, sessions, projectLabel = "") {
   content.replaceChildren();
 
   const sorted = [...sessions].sort((a, b) => {
-    const priority = { Waiting: 0, Working: 1, Done: 2, Idle: 3 };
+    const priority = { Error: 0, Waiting: 1, Working: 2, Done: 3, Idle: 4 };
     return (priority[a.status] || 99) - (priority[b.status] || 99);
   });
 
@@ -97,11 +97,26 @@ function createSessionRow(session) {
   tool.className = "session-tool";
   const origin = session.monitor_origin || session.monitorOrigin;
   const originLabel = origin ? `${formatOrigin(origin)} · ` : "";
-  tool.textContent = `${originLabel}${formatToolLabel(session.tool)}`;
+  const errorMessage = session.error_message || session.errorMessage;
+  const pendingAction = session.pending_action || session.pendingAction;
+  tool.textContent =
+    session.status === "Error" && errorMessage
+      ? `${originLabel}${formatToolLabel(session.tool)} · ${errorMessage}`
+      : session.status === "Waiting" && pendingAction?.title
+        ? `${originLabel}${formatToolLabel(session.tool)} · ${pendingAction.title}`
+      : `${originLabel}${formatToolLabel(session.tool)}`;
+  if (errorMessage) {
+    tool.title = errorMessage;
+  }
 
   info.append(name, tool);
 
-  if (session.status === "Waiting" || session.status === "Done") {
+  if (pendingAction) {
+    row.classList.add("has-pending-action");
+    info.appendChild(createPendingActionMeta(pendingAction));
+  }
+
+  if (isConfirmableStatus(session.status) && !pendingAction) {
     row.classList.add("is-actionable");
     row.addEventListener("click", (event) => {
       event.stopPropagation();
@@ -115,6 +130,63 @@ function createSessionRow(session) {
 
   row.append(indicator, info);
   return row;
+}
+
+function createPendingActionMeta(pendingAction) {
+  const meta = document.createElement("div");
+  meta.className = "pending-action-meta";
+
+  const title = document.createElement("span");
+  title.className = "pending-action-title";
+  title.textContent = pendingAction.title || "等待处理";
+
+  const decisions = Array.isArray(pendingAction.decisions)
+    ? pendingAction.decisions.map(formatDecisionLabel).filter(Boolean)
+    : [];
+  const decisionText = document.createElement("span");
+  decisionText.className = "pending-action-decisions";
+  decisionText.textContent = decisions.length
+    ? decisions.join(" / ")
+    : formatPendingKind(pendingAction.kind);
+
+  meta.append(title, decisionText);
+  return meta;
+}
+
+function formatDecisionLabel(decision) {
+  switch (decision) {
+    case "OpenProvider":
+      return "回到终端处理";
+    case "Dismiss":
+      return "可确认清除";
+    case "Approve":
+      return "可批准";
+    case "Deny":
+      return "可拒绝";
+    case "AskInProvider":
+      return "在工具内询问";
+    case "Defer":
+      return "稍后处理";
+    default:
+      return "";
+  }
+}
+
+function formatPendingKind(kind) {
+  switch (kind) {
+    case "ShellExecution":
+      return "Shell 等待";
+    case "McpExecution":
+      return "MCP 等待";
+    case "FileRead":
+      return "文件读取等待";
+    case "UserQuestion":
+      return "问题等待";
+    case "StaleSession":
+      return "长时间无更新";
+    default:
+      return "权限等待";
+  }
 }
 
 function formatToolLabel(tool) {
@@ -154,6 +226,8 @@ function shortenSessionId(sessionId) {
  */
 function statusIcon(status) {
   switch (status) {
+    case "Error":
+      return "!";
     case "Working":
       return "🟢";
     case "Waiting":
@@ -184,13 +258,17 @@ export function updateProjectDrawer(drawerRoot, projects) {
   content.replaceChildren();
 
   const sorted = [...projects].sort((a, b) => {
-    const priority = { Waiting: 0, Working: 1, Done: 2, Idle: 3 };
+    const priority = { Error: 0, Waiting: 1, Working: 2, Done: 3, Idle: 4 };
     return (priority[a.status] || 99) - (priority[b.status] || 99);
   });
 
   for (const project of sorted) {
     content.appendChild(createProjectRow(project));
   }
+}
+
+function isConfirmableStatus(status) {
+  return status === "Error" || status === "Waiting" || status === "Done";
 }
 
 function createProjectRow(project) {

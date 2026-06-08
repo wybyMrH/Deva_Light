@@ -1,9 +1,14 @@
+use crate::agent_event::{
+    AgentEvent, PendingActionKind, PendingActionSummary, PrivacyLevel, ProviderId, UserDecisionKind,
+};
 use crate::aggregator::StateAggregator;
 use crate::config::{
     ensure_http_token, load_runtime_config, save_app_config, save_runtime_config, AppConfig,
     RuntimeConfig,
 };
+use crate::error_detection::text_looks_like_error;
 use crate::logging::{log_error, log_info, log_warn};
+use crate::providers;
 use crate::types::{Status, Tool};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -29,7 +34,10 @@ pub struct HookEvent {
         alias = "prompt",
         alias = "user_prompt",
         alias = "message",
-        alias = "task"
+        alias = "task",
+        alias = "error",
+        alias = "reason",
+        alias = "details"
     )]
     pub task_hint: Option<String>,
     #[serde(default)]
@@ -38,6 +46,10 @@ pub struct HookEvent {
 
 impl HookEvent {
     pub fn resolve_status(&self) -> Option<Status> {
+        if self.is_error_signal() {
+            return Some(Status::Error);
+        }
+
         let status = Self::event_type_to_status(&self.event_type)?;
 
         // Cursor shows approval UI after preToolUse; beforeShellExecution only fires
@@ -55,7 +67,13 @@ impl HookEvent {
             "prompt-submit" | "before-submit-prompt" => Some(Status::Working),
             "pre-tool-use" => Some(Status::Working),
             "permission-request" => Some(Status::Waiting),
-            "post-tool-use" | "post-tool-use-failure" => Some(Status::Working),
+            "post-tool-use" => Some(Status::Working),
+            "post-tool-use-failure"
+            | "error"
+            | "stream-error"
+            | "connection-error"
+            | "retry-error"
+            | "turn-aborted" => Some(Status::Error),
             "notification" => Some(Status::Waiting),
             // Cursor approval gates (no Claude PermissionRequest equivalent)
             "before-shell-execution" | "before-mcp-execution" | "before-read-file" => {
@@ -73,11 +91,83 @@ impl HookEvent {
         }
     }
 
-    pub fn resolve_tool(&self) -> Tool {
-        if self.source.as_deref() == Some("cursor") {
-            return Tool::Cursor;
+    pub fn error_message(&self) -> Option<String> {
+        if !self.is_error_signal() {
+            return None;
         }
-        Tool::ClaudeCode
+
+        self.task_hint
+            .as_deref()
+            .or(self.tool_call.as_deref())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+            .or_else(|| Some(self.event_type.clone()))
+    }
+
+    fn is_error_signal(&self) -> bool {
+        matches!(
+            self.event_type.as_str(),
+            "post-tool-use-failure"
+                | "error"
+                | "stream-error"
+                | "connection-error"
+                | "retry-error"
+                | "turn-aborted"
+        ) || (self.event_type == "notification" && self.notification_looks_like_error())
+    }
+
+    fn notification_looks_like_error(&self) -> bool {
+        self.task_hint
+            .as_deref()
+            .or(self.tool_call.as_deref())
+            .is_some_and(text_looks_like_error)
+    }
+
+    pub fn resolve_tool(&self) -> Tool {
+        self.resolve_provider().tool()
+    }
+
+    pub fn resolve_provider(&self) -> ProviderId {
+        providers::provider_from_source(self.source.as_deref())
+    }
+
+    pub fn to_agent_event(&self) -> AgentEvent {
+        let provider = self.resolve_provider();
+        let mut event = AgentEvent::new(provider, self.session_id.clone(), self.event_type.clone());
+        event.cwd = self.cwd.as_deref().map(PathBuf::from);
+        event.status = self.resolve_status();
+        event.task_hint = self.task_hint.clone();
+        event.tool_name = self.tool_call.clone();
+        event.summary = self.error_message().or_else(|| self.task_hint.clone());
+        event.pending_action = self.pending_action_summary(provider);
+        event.privacy = PrivacyLevel::MetadataOnly;
+        event
+    }
+
+    fn pending_action_summary(&self, provider: ProviderId) -> Option<PendingActionSummary> {
+        if self.resolve_status() != Some(Status::Waiting) {
+            return None;
+        }
+
+        let title = waiting_title(provider, self);
+        let kind = waiting_kind(self);
+        let decisions = match provider {
+            ProviderId::ClaudeCode => {
+                vec![UserDecisionKind::OpenProvider, UserDecisionKind::Dismiss]
+            }
+            ProviderId::Cursor => vec![UserDecisionKind::OpenProvider, UserDecisionKind::Dismiss],
+            ProviderId::Codex => vec![UserDecisionKind::OpenProvider, UserDecisionKind::Dismiss],
+        };
+
+        Some(PendingActionSummary::new(
+            provider,
+            &self.session_id,
+            kind,
+            title,
+            decisions,
+            120_000,
+        ))
     }
 
     pub fn is_subagent_event(&self) -> bool {
@@ -90,6 +180,37 @@ impl HookEvent {
         }
 
         matches!(self.event_type.as_str(), "session-start" | "session-end")
+    }
+}
+
+fn waiting_title(provider: ProviderId, event: &HookEvent) -> String {
+    let provider_label = match provider {
+        ProviderId::ClaudeCode => "Claude",
+        ProviderId::Cursor => "Cursor",
+        ProviderId::Codex => "Codex",
+    };
+    let detail = event
+        .task_hint
+        .as_deref()
+        .or(event.tool_call.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    match detail {
+        Some(detail) => format!("{provider_label} 等待处理：{detail}"),
+        None => format!("{provider_label} 等待处理"),
+    }
+}
+
+fn waiting_kind(event: &HookEvent) -> PendingActionKind {
+    match event.event_type.as_str() {
+        "permission-request" => PendingActionKind::PermissionRequest,
+        "before-shell-execution" => PendingActionKind::ShellExecution,
+        "before-mcp-execution" => PendingActionKind::McpExecution,
+        "before-read-file" => PendingActionKind::FileRead,
+        "pre-tool-use" => PendingActionKind::ToolApproval,
+        "notification" => PendingActionKind::UserQuestion,
+        _ => PendingActionKind::ToolApproval,
     }
 }
 
@@ -421,44 +542,37 @@ fn apply_hook_event(aggregator: &StateAggregator, event: HookEvent) {
 
     match event.event_type.as_str() {
         "session-start" => {
-            let cwd = resolve_event_cwd(&event);
-            aggregator.add_session(event.session_id, tool, &cwd, Status::Idle);
+            aggregator.apply_agent_event(event.to_agent_event());
         }
         "session-end" => {
-            aggregator.remove_session(&event.session_id);
+            aggregator.apply_agent_event(event.to_agent_event());
         }
         _ => {
             ensure_session_exists(aggregator, &event, tool);
 
-            if should_ignore_late_event_after_done(aggregator, &event) {
+            if should_ignore_late_event_after_terminal(aggregator, &event) {
                 log_info(
                     "http_server",
                     format!(
-                        "ignored late {} for completed session {}",
+                        "ignored late {} for terminal session {}",
                         event.event_type, event.session_id
                     ),
                 );
                 return;
             }
 
-            if let Some(status) = event.resolve_status() {
-                if should_apply_status_transition(
+            let mut agent_event = event.to_agent_event();
+            if let Some(status) = agent_event.status {
+                if !should_apply_status_transition(
                     aggregator.session_status(&event.session_id),
                     status,
                     &event.event_type,
                     event.source.as_deref(),
                 ) {
-                    aggregator.update_session_status(&event.session_id, status);
+                    agent_event.status = None;
                 }
             }
-
-            if let Some(task_hint) = event.task_hint.as_deref().filter(|value| !value.is_empty()) {
-                aggregator.set_task_name(&event.session_id, task_hint.to_string());
-            }
-
-            if let Some(tool_call) = event.tool_call {
-                aggregator.set_last_tool_call(&event.session_id, tool_call);
-            }
+            aggregator.apply_agent_event(agent_event);
         }
     }
 }
@@ -532,21 +646,36 @@ fn should_apply_status_transition(
     )
 }
 
-fn should_ignore_late_event_after_done(aggregator: &StateAggregator, event: &HookEvent) -> bool {
-    if aggregator.session_status(&event.session_id) != Some(Status::Done) {
-        return false;
+fn should_ignore_late_event_after_terminal(
+    aggregator: &StateAggregator,
+    event: &HookEvent,
+) -> bool {
+    match aggregator.session_status(&event.session_id) {
+        Some(Status::Done) => matches!(
+            event.event_type.as_str(),
+            "pre-tool-use"
+                | "permission-request"
+                | "post-tool-use"
+                | "notification"
+                | "before-shell-execution"
+                | "before-mcp-execution"
+                | "before-read-file"
+        ),
+        Some(Status::Error) => {
+            !event.is_error_signal()
+                && matches!(
+                    event.event_type.as_str(),
+                    "post-tool-use"
+                        | "after-shell-execution"
+                        | "after-mcp-execution"
+                        | "after-file-edit"
+                        | "after-agent-response"
+                        | "after-agent-thought"
+                        | "stop"
+                )
+        }
+        _ => false,
     }
-
-    matches!(
-        event.event_type.as_str(),
-        "pre-tool-use"
-            | "permission-request"
-            | "post-tool-use"
-            | "notification"
-            | "before-shell-execution"
-            | "before-mcp-execution"
-            | "before-read-file"
-    )
 }
 
 fn find_header_split(buffer: &[u8]) -> Option<(usize, usize)> {

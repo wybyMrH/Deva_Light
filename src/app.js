@@ -181,7 +181,15 @@ async function beginWindowDrag(event) {
 }
 
 function statusPriority(status) {
-  return ({ Waiting: 3, Working: 2, Done: 1, Idle: 0 }[status] ?? 0);
+  return ({ Error: 4, Waiting: 3, Working: 2, Done: 1, Idle: 0 }[status] ?? 0);
+}
+
+function isRedStatus(status) {
+  return status === "Error" || status === "Done" || status === "Idle";
+}
+
+function isConfirmableStatus(status) {
+  return status === "Error" || status === "Waiting" || status === "Done";
 }
 
 function lightsForDisplay() {
@@ -278,7 +286,11 @@ function render() {
     const drawerLight = lights.find(
       (light) => light.project_id === drawerProjectId,
     );
-    if (drawerLight && (drawerLight.sessions?.length || 0) > 1) {
+    if (
+      drawerLight &&
+      ((drawerLight.sessions?.length || 0) > 1 ||
+        hasPendingAction(drawerLight.sessions || []))
+    ) {
       updateDrawer(
         drawer,
         drawerLight.sessions,
@@ -363,8 +375,9 @@ function createProjectLight(lightState) {
 
       if (
         sessions.length === 1 &&
-        (status === "Waiting" || status === "Done") &&
-        event.target.closest(".lamp.on")
+        isConfirmableStatus(status) &&
+        event.target.closest(".lamp.on") &&
+        !hasPendingAction(sessions)
       ) {
         safeInvoke("confirm_light", { projectId });
         return;
@@ -391,7 +404,8 @@ function createProjectLight(lightState) {
         );
         if (
           session &&
-          (session.status === "Waiting" || session.status === "Done")
+          isConfirmableStatus(session.status) &&
+          !(session.pending_action || session.pendingAction)
         ) {
           safeInvoke("confirm_session", { sessionId: session.session_id });
         }
@@ -408,16 +422,25 @@ function createProjectLight(lightState) {
       }
 
       if (
-        (status === "Waiting" || status === "Done") &&
-        event.target.closest(".lamp.on")
+        isConfirmableStatus(status) &&
+        event.target.closest(".lamp.on") &&
+        !hasPendingAction(sessions)
       ) {
         safeInvoke("confirm_light", { projectId });
       }
       return;
     }
 
+    if (status === "Waiting" && hasPendingAction(sessions)) {
+      event.stopPropagation();
+      hideMenu();
+      toggleSessionDrawer(projectId, root.lightState);
+      scheduleWindowResize();
+      return;
+    }
+
     if (
-      (status === "Waiting" || status === "Done") &&
+      isConfirmableStatus(status) &&
       event.target.closest(".lamp.on")
     ) {
       safeInvoke("confirm_light", { projectId });
@@ -448,6 +471,7 @@ function createLightElement({ label, status, title, standby = false }) {
   root.className = `traffic-light${standby ? " standby" : ""}`;
   root.title = title;
   root.dataset.status = status;
+  root.classList.add(`status-${String(status).toLowerCase()}`);
 
   const housing = document.createElement("div");
   housing.className = "light-housing";
@@ -456,7 +480,7 @@ function createLightElement({ label, status, title, standby = false }) {
   originChip.className = "origin-chip hidden";
   housing.appendChild(originChip);
 
-  housing.appendChild(createLamp("red", status === "Done" || status === "Idle"));
+  housing.appendChild(createLamp("red", isRedStatus(status)));
   housing.appendChild(createLamp("yellow", status === "Waiting"));
   housing.appendChild(createLamp("green", status === "Working"));
 
@@ -477,13 +501,15 @@ function updateProjectLight(root, lightState) {
   root.dataset.projectId = lightState.project_id;
   root.dataset.status = lightState.status;
   root.title = tooltipFor(lightState);
+  root.classList.remove("status-error", "status-waiting", "status-working", "status-done", "status-idle");
+  root.classList.add(`status-${String(lightState.status || "Idle").toLowerCase()}`);
 
   const origin = lightState.monitor_origin || lightState.monitorOrigin || "local";
   root.classList.remove("origin-local", "origin-wsl", "origin-ssh", "origin-remote");
   root.classList.add(`origin-${String(origin).toLowerCase()}`);
   root.classList.toggle(
     "is-actionable",
-    lightState.status === "Waiting" || lightState.status === "Done",
+    isConfirmableStatus(lightState.status),
   );
 
   const label = root.querySelector(".light-label");
@@ -516,8 +542,9 @@ function updateProjectLight(root, lightState) {
   // Status to lamp mapping:
   // - Working: Green (AI is actively processing)
   // - Waiting: Yellow (needs user attention)
+  // - Error: Flashing red (error / failed retry / auth or network problem)
   // - Done/Idle: Red (session ended or waiting for first prompt)
-  root.querySelector(".lamp.red")?.classList.toggle("on", lightState.status === "Done" || lightState.status === "Idle");
+  root.querySelector(".lamp.red")?.classList.toggle("on", isRedStatus(lightState.status));
   root.querySelector(".lamp.yellow")?.classList.toggle("on", lightState.status === "Waiting");
   root.querySelector(".lamp.green")?.classList.toggle("on", lightState.status === "Working");
 
@@ -593,7 +620,10 @@ function updateSessionChips(root, sessions) {
     if (isInteractive) {
       chip.addEventListener("click", (event) => {
         event.stopPropagation();
-        if (session.status === "Waiting" || session.status === "Done") {
+        if (
+          isConfirmableStatus(session.status) &&
+          !(session.pending_action || session.pendingAction)
+        ) {
           safeInvoke("confirm_session", { sessionId: session.session_id });
         }
       });
@@ -601,6 +631,12 @@ function updateSessionChips(root, sessions) {
 
     container.appendChild(chip);
   });
+}
+
+function hasPendingAction(sessions) {
+  return (sessions || []).some(
+    (session) => session.pending_action || session.pendingAction,
+  );
 }
 
 function createLamp(color, isOn) {
@@ -627,16 +663,38 @@ function tooltipFor(lightState) {
     lightState.project_label || lightState.project_id,
     origin ? `来源: ${origin}` : null,
     status,
+    status === "Error"
+      ? "错误：点击闪烁红灯确认已处理"
+      : null,
     status === "Waiting" || status === "Done"
       ? "点击亮起的黄/红灯确认已处理"
       : null,
   ].filter(Boolean);
+
+  const errorMessage = lightErrorMessage(lightState);
+  if (errorMessage) {
+    parts.push(errorMessage);
+  }
 
   if (lightState.last_tool_call) {
     parts.push(lightState.last_tool_call);
   }
 
   return parts.join("\n");
+}
+
+function lightErrorMessage(lightState) {
+  return (
+    lightState.last_error ||
+    lightState.lastError ||
+    (lightState.sessions || [])
+      .find((session) => session.status === "Error" && (session.error_message || session.errorMessage))
+      ?.error_message ||
+    (lightState.sessions || [])
+      .find((session) => session.status === "Error" && (session.error_message || session.errorMessage))
+      ?.errorMessage ||
+    ""
+  );
 }
 
 function showMenu(x, y, items) {

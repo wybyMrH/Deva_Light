@@ -15,7 +15,6 @@ const REMOVE_INACTIVE_AFTER: Duration = Duration::from_secs(15 * 60);
 #[derive(Debug, Clone)]
 struct TrackedCursorSession {
     session_id: String,
-    cwd: PathBuf,
     last_activity_at: SystemTime,
 }
 
@@ -56,7 +55,6 @@ fn run_cursor_watcher(aggregator: Arc<StateAggregator>) {
                         })
                         .or_insert_with(|| TrackedCursorSession {
                             session_id: entry.session_id.clone(),
-                            cwd: entry.cwd.clone(),
                             last_activity_at: entry.last_activity_at,
                         });
                     continue;
@@ -115,7 +113,6 @@ fn run_cursor_watcher(aggregator: Arc<StateAggregator>) {
 #[derive(Debug, Clone)]
 struct CursorSessionEntry {
     session_id: String,
-    cwd: PathBuf,
     last_activity_at: SystemTime,
 }
 
@@ -133,13 +130,14 @@ fn scan_cursor_sessions(projects_dir: &Path) -> Result<Vec<CursorSessionEntry>, 
             continue;
         }
 
-        let Some(cwd) = project_path
+        if project_path
             .file_name()
             .and_then(|name| name.to_str())
             .and_then(decode_cursor_project_slug)
-        else {
+            .is_none()
+        {
             continue;
-        };
+        }
 
         let transcripts_dir = project_path.join("agent-transcripts");
         if !transcripts_dir.exists() {
@@ -163,7 +161,6 @@ fn scan_cursor_sessions(projects_dir: &Path) -> Result<Vec<CursorSessionEntry>, 
 
             results.push(CursorSessionEntry {
                 session_id: session_id.to_string(),
-                cwd: cwd.clone(),
                 last_activity_at,
             });
         }

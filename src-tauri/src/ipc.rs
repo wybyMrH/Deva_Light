@@ -10,6 +10,7 @@ use deva_light::hook_installer::{
 use deva_light::http_server::HttpServerController;
 use deva_light::logging::log_info;
 use deva_light::monitoring::{is_monitoring_paused, set_monitoring_paused};
+use deva_light::providers::ProviderCapabilityView;
 use deva_light::remote::{build_remote_setup_info, RemoteSetupInfo};
 use deva_light::types::LightState;
 use deva_light::window_behavior::{apply_main_window_pin, configure_main_window_workspace};
@@ -37,6 +38,7 @@ pub struct Diagnostics {
     pub hook_binary_exists: bool,
     pub runtime_exists: bool,
     pub light_count: usize,
+    pub provider_capabilities: Vec<ProviderCapabilityView>,
     pub recent_log: String,
 }
 
@@ -422,6 +424,7 @@ pub fn get_diagnostics(aggregator: State<Arc<StateAggregator>>) -> Diagnostics {
         hook_binary_exists: hook_binary_path.exists(),
         runtime_exists: get_runtime_path().exists(),
         light_count: aggregator.get_lights().len(),
+        provider_capabilities: deva_light::providers::all_provider_capabilities(),
         recent_log: recent_log(&log_path),
     }
 }

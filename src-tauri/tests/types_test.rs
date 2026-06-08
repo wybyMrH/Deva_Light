@@ -4,6 +4,7 @@ use std::time::Instant;
 
 #[test]
 fn test_status_ordering() {
+    assert!(Status::Error > Status::Waiting);
     assert!(Status::Waiting > Status::Working);
     assert!(Status::Working > Status::Done);
     assert!(Status::Done > Status::Idle);
@@ -11,11 +12,11 @@ fn test_status_ordering() {
 
 #[test]
 fn test_status_max() {
-    let statuses = vec![Status::Idle, Status::Working, Status::Done];
+    let statuses = [Status::Idle, Status::Working, Status::Done];
     assert_eq!(statuses.iter().max(), Some(&Status::Working));
 
-    let with_error = vec![Status::Working, Status::Waiting, Status::Idle];
-    assert_eq!(with_error.iter().max(), Some(&Status::Waiting));
+    let with_error = [Status::Working, Status::Waiting, Status::Error];
+    assert_eq!(with_error.iter().max(), Some(&Status::Error));
 }
 
 #[test]
@@ -40,6 +41,8 @@ fn test_light_state_aggregation() {
         status: Status::Working,
         started_at: Instant::now(),
         task_name: None,
+        error_message: None,
+        pending_action: None,
         monitor_origin: Some(MonitorOrigin::Local),
         process_id: None,
     });
@@ -53,9 +56,26 @@ fn test_light_state_aggregation() {
         status: Status::Waiting,
         started_at: Instant::now(),
         task_name: None,
+        error_message: None,
+        pending_action: None,
         monitor_origin: Some(MonitorOrigin::Local),
         process_id: None,
     });
     light.aggregate_status();
     assert_eq!(light.status, Status::Waiting);
+
+    // Add error session - should override waiting
+    light.sessions.push(SessionRef {
+        session_id: "s3".to_string(),
+        tool: Tool::Codex,
+        status: Status::Error,
+        started_at: Instant::now(),
+        task_name: None,
+        error_message: Some("unexpected status 502 Bad Gateway".to_string()),
+        pending_action: None,
+        monitor_origin: Some(MonitorOrigin::Local),
+        process_id: None,
+    });
+    light.aggregate_status();
+    assert_eq!(light.status, Status::Error);
 }
