@@ -109,9 +109,12 @@ fn main() {
                 let _ = window.set_background_color(Some(Color(0, 0, 0, 0)));
             }
 
-            let _ = window.set_position(tauri::Position::Physical(
-                tauri::PhysicalPosition::new(app_config.window_x, app_config.window_y),
-            ));
+            configure_main_window_workspace(&window);
+
+            let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
+                app_config.window_x,
+                app_config.window_y,
+            )));
 
             // Pin only while active tasks exist; preference is applied in on_change.
             let _ = window.set_always_on_top(false);
@@ -144,6 +147,7 @@ fn main() {
 
                 let config = load_app_config();
                 let pin_window = config.always_on_top && emit_aggregator.has_active_lights();
+                configure_main_window_workspace(&emit_window);
                 let _ = emit_window.set_always_on_top(pin_window);
 
                 if !config.notifications_enabled {
@@ -236,6 +240,7 @@ fn setup_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> 
         .on_menu_event(move |app, event| match event.id.as_ref() {
             "show" => {
                 if let Some(win) = app.get_webview_window("main") {
+                    configure_main_window_workspace(&win);
                     let _ = win.show();
                     let _ = win.set_focus();
                 }
@@ -257,4 +262,9 @@ fn setup_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> 
         .build(&app_handle)?;
 
     Ok(())
+}
+
+fn configure_main_window_workspace(window: &tauri::WebviewWindow) {
+    let _ = window.set_visible_on_all_workspaces(true);
+    let _ = window.set_skip_taskbar(true);
 }

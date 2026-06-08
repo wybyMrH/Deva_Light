@@ -4,9 +4,9 @@ use crate::codex_paths::{
     CodexSessionRootSummary,
 };
 use crate::config::load_app_config;
+use crate::logging::{log_error, log_info, log_warn};
 use crate::monitoring::is_monitoring_paused;
 use crate::ssh_remote::{is_ssh_virtual_path, read_rollout_from_offset, rollout_modified};
-use crate::logging::{log_error, log_info, log_warn};
 use crate::types::{Status, Tool};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -91,9 +91,13 @@ fn run_codex_watcher(aggregator: Arc<StateAggregator>) {
             }
         }
 
-        if let Err(error) =
-            poll_codex_sessions(&aggregator, &mut files, baseline, &scan_roots, &tracked_only_roots)
-        {
+        if let Err(error) = poll_codex_sessions(
+            &aggregator,
+            &mut files,
+            baseline,
+            &scan_roots,
+            &tracked_only_roots,
+        ) {
             log_watcher_error("poll codex sessions", &error);
         }
         if should_scan_wsl {
@@ -259,7 +263,10 @@ fn initialize_existing_rollout(
         match parse_codex_line(line.trim_end()) {
             Ok(CodexLineEvent::SessionMeta(meta)) => watched.meta = Some(meta),
             Ok(CodexLineEvent::Status(status)) => watched.last_status = Some(status),
-            Ok(CodexLineEvent::ToolCall(tool_call)) => last_tool_call = Some(tool_call),
+            Ok(CodexLineEvent::ToolCall(tool_call)) => {
+                watched.last_status = Some(status_for_tool_call(&tool_call));
+                last_tool_call = Some(tool_call);
+            }
             Ok(CodexLineEvent::Ignore) => {}
             Err(error) => log_watcher_error(&format!("parse {}", path.display()), &error),
         }
@@ -389,35 +396,16 @@ fn apply_codex_event(
             watched.meta = Some(meta);
         }
         CodexLineEvent::Status(status) => {
-            let Some(meta) = watched.meta.clone() else {
-                return;
-            };
-            let status_changed = watched.last_status != Some(status);
-
-            if !watched.added_to_aggregator {
-                aggregator.add_session_with_context(
-                    meta.session_id.clone(),
-                    Tool::Codex,
-                    &meta.cwd,
-                    status,
-                    Some(rollout_path),
-                );
-                watched.added_to_aggregator = true;
-            } else {
-                aggregator.update_session_status(&meta.session_id, status);
-            }
-            watched.last_status = Some(status);
-            watched.last_activity_at = SystemTime::now();
-            if status_changed {
-                log_watcher_note(&format!(
-                    "session {} -> {}",
-                    meta.session_id,
-                    status_name(status)
-                ));
-            }
+            apply_status_event(aggregator, watched, status, rollout_path);
         }
         CodexLineEvent::ToolCall(tool_call) => {
-            if let Some(meta) = &watched.meta {
+            if let Some(meta) = watched.meta.clone() {
+                apply_status_event(
+                    aggregator,
+                    watched,
+                    status_for_tool_call(&tool_call),
+                    rollout_path,
+                );
                 aggregator.set_last_tool_call(&meta.session_id, tool_call.clone());
                 log_watcher_note(&format!("session {} tool {}", meta.session_id, tool_call));
             }
@@ -489,6 +477,45 @@ fn remove_missing_rollout(aggregator: &StateAggregator, path: &Path, watched: Wa
     }
 }
 
+fn apply_status_event(
+    aggregator: &StateAggregator,
+    watched: &mut WatchedRollout,
+    status: Status,
+    rollout_path: &Path,
+) {
+    let Some(meta) = watched.meta.clone() else {
+        return;
+    };
+
+    let status_changed = watched.last_status != Some(status);
+    let still_tracked =
+        watched.added_to_aggregator && aggregator.session_status(&meta.session_id).is_some();
+
+    if still_tracked {
+        aggregator.update_session_status(&meta.session_id, status);
+    } else {
+        aggregator.add_session_with_context(
+            meta.session_id.clone(),
+            Tool::Codex,
+            &meta.cwd,
+            status,
+            Some(rollout_path),
+        );
+    }
+
+    watched.added_to_aggregator = aggregator.session_status(&meta.session_id).is_some();
+    watched.last_status = Some(status);
+    watched.last_activity_at = SystemTime::now();
+
+    if status_changed {
+        log_watcher_note(&format!(
+            "session {} -> {}",
+            meta.session_id,
+            status_name(status)
+        ));
+    }
+}
+
 pub fn parse_codex_line(line: &str) -> serde_json::Result<CodexLineEvent> {
     let line = line.trim_start_matches('\u{feff}');
 
@@ -504,6 +531,7 @@ pub fn parse_codex_line(line: &str) -> serde_json::Result<CodexLineEvent> {
     let payload = value.get("payload").unwrap_or(&Value::Null);
 
     match line_type {
+        "turn_context" => Ok(CodexLineEvent::Status(Status::Working)),
         "session_meta" => {
             let session_id = payload
                 .get("id")
@@ -529,7 +557,9 @@ pub fn parse_codex_line(line: &str) -> serde_json::Result<CodexLineEvent> {
                 .unwrap_or_default();
 
             Ok(match event_type {
-                "task_started" | "agent_message" => CodexLineEvent::Status(Status::Working),
+                "task_started" | "user_message" | "agent_message" | "patch_apply_begin"
+                | "patch_apply_end" | "exec_command_begin" | "exec_command_end"
+                | "web_search_begin" | "web_search_end" => CodexLineEvent::Status(Status::Working),
                 "task_complete" => CodexLineEvent::Status(Status::Done),
                 "error" | "stream_error" | "turn_aborted" => {
                     CodexLineEvent::Status(Status::Waiting)
@@ -543,11 +573,20 @@ pub fn parse_codex_line(line: &str) -> serde_json::Result<CodexLineEvent> {
                 .and_then(Value::as_str)
                 .unwrap_or_default();
 
-            if payload_type == "function_call" {
+            if matches!(
+                payload_type,
+                "function_call" | "custom_tool_call" | "web_search_call"
+            ) {
                 let tool_call = payload
                     .get("name")
                     .and_then(Value::as_str)
-                    .unwrap_or("tool")
+                    .unwrap_or_else(|| {
+                        if payload_type == "web_search_call" {
+                            "web_search"
+                        } else {
+                            "tool"
+                        }
+                    })
                     .to_string();
                 Ok(CodexLineEvent::ToolCall(tool_call))
             } else {
@@ -555,6 +594,13 @@ pub fn parse_codex_line(line: &str) -> serde_json::Result<CodexLineEvent> {
             }
         }
         _ => Ok(CodexLineEvent::Ignore),
+    }
+}
+
+fn status_for_tool_call(tool_call: &str) -> Status {
+    match tool_call {
+        "request_user_input" => Status::Waiting,
+        _ => Status::Working,
     }
 }
 
@@ -579,7 +625,10 @@ fn initialize_existing_rollout_ssh(
         match parse_codex_line(line) {
             Ok(CodexLineEvent::SessionMeta(meta)) => watched.meta = Some(meta),
             Ok(CodexLineEvent::Status(status)) => watched.last_status = Some(status),
-            Ok(CodexLineEvent::ToolCall(tool_call)) => last_tool_call = Some(tool_call),
+            Ok(CodexLineEvent::ToolCall(tool_call)) => {
+                watched.last_status = Some(status_for_tool_call(&tool_call));
+                last_tool_call = Some(tool_call);
+            }
             Ok(CodexLineEvent::Ignore) => {}
             Err(error) => log_watcher_error(&format!("parse {}", path.display()), &error),
         }
@@ -744,6 +793,14 @@ mod tests {
             CodexLineEvent::Status(Status::Working)
         );
         assert_eq!(
+            parse_codex_line(r#"{"type":"event_msg","payload":{"type":"user_message"}}"#).unwrap(),
+            CodexLineEvent::Status(Status::Working)
+        );
+        assert_eq!(
+            parse_codex_line(r#"{"type":"turn_context"}"#).unwrap(),
+            CodexLineEvent::Status(Status::Working)
+        );
+        assert_eq!(
             parse_codex_line(r#"{"type":"event_msg","payload":{"type":"task_complete"}}"#).unwrap(),
             CodexLineEvent::Status(Status::Done)
         );
@@ -772,6 +829,14 @@ mod tests {
             )
             .unwrap(),
             CodexLineEvent::ToolCall("shell_command".to_string())
+        );
+
+        assert_eq!(
+            parse_codex_line(
+                r#"{"type":"response_item","payload":{"type":"custom_tool_call","name":"apply_patch","status":"completed"}}"#,
+            )
+            .unwrap(),
+            CodexLineEvent::ToolCall("apply_patch".to_string())
         );
     }
 
@@ -828,6 +893,93 @@ mod tests {
         assert!(
             aggregator.get_lights().is_empty(),
             "completed codex tasks should auto-hide from the lamp strip"
+        );
+
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn completed_codex_session_can_resume_from_same_rollout() {
+        let root = std::env::temp_dir().join(unique_name("ai-light-codex-root"));
+        let project = std::env::temp_dir().join(unique_name("ai-light-codex-project"));
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&project).unwrap();
+
+        let rollout = root.join("rollout-2026-05-31T00-00-00-s1.jsonl");
+        let initial = format!(
+            "{}\n{}\n{}\n",
+            json_line(
+                "session_meta",
+                &format!(r#"{{"id":"s1","cwd":"{}"}}"#, json_path(&project))
+            ),
+            json_line("event_msg", r#"{"type":"task_started"}"#),
+            json_line("event_msg", r#"{"type":"task_complete"}"#)
+        );
+        fs::write(&rollout, &initial).unwrap();
+
+        let aggregator = StateAggregator::new();
+        let mut files = HashMap::new();
+        poll_rollout_root(&aggregator, &mut files, false, &root).unwrap();
+        assert!(aggregator.get_lights().is_empty());
+
+        fs::write(
+            &rollout,
+            format!(
+                "{}{}\n",
+                initial,
+                json_line(
+                    "response_item",
+                    r#"{"type":"custom_tool_call","name":"apply_patch","status":"completed"}"#
+                )
+            ),
+        )
+        .unwrap();
+
+        poll_rollout_root(&aggregator, &mut files, false, &root).unwrap();
+        let lights = aggregator.get_lights();
+        assert_eq!(lights.len(), 1);
+        assert_eq!(lights[0].status, Status::Working);
+        assert_eq!(lights[0].last_tool_call.as_deref(), Some("apply_patch"));
+
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn codex_request_user_input_tool_call_marks_session_waiting() {
+        let root = std::env::temp_dir().join(unique_name("ai-light-codex-root"));
+        let project = std::env::temp_dir().join(unique_name("ai-light-codex-project"));
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&project).unwrap();
+
+        let rollout = root.join("rollout-2026-05-31T00-00-00-s1.jsonl");
+        fs::write(
+            &rollout,
+            format!(
+                "{}\n{}\n",
+                json_line(
+                    "session_meta",
+                    &format!(r#"{{"id":"s1","cwd":"{}"}}"#, json_path(&project))
+                ),
+                json_line(
+                    "response_item",
+                    r#"{"type":"function_call","name":"request_user_input"}"#
+                )
+            ),
+        )
+        .unwrap();
+
+        let aggregator = StateAggregator::new();
+        let mut files = HashMap::new();
+        poll_rollout_root(&aggregator, &mut files, false, &root).unwrap();
+
+        let lights = aggregator.get_lights();
+        assert_eq!(lights.len(), 1);
+        assert_eq!(lights[0].status, Status::Waiting);
+        assert_eq!(
+            lights[0].last_tool_call.as_deref(),
+            Some("request_user_input")
         );
 
         let _ = fs::remove_dir_all(root);

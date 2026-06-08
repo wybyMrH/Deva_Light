@@ -26,9 +26,9 @@ body {
 body {
   display: flex;
   flex-direction: row;
-  align-items: flex-end;
+  align-items: flex-start;
   gap: 6px;
-  padding: 10px 36px 20px 10px;
+  padding: 0 36px 20px 10px;
 }
 
 .traffic-light.is-drawer-active .light-housing {

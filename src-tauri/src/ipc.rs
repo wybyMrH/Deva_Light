@@ -4,13 +4,13 @@ use deva_light::config::{
     ensure_http_token, get_config_dir, get_config_path, get_lock_path, get_log_path,
     get_runtime_path, load_app_config, load_runtime_config, save_app_config, DisplayMode,
 };
-use deva_light::monitoring::{is_monitoring_paused, set_monitoring_paused};
-use deva_light::remote::{build_remote_setup_info, RemoteSetupInfo};
 use deva_light::hook_installer::{
     check_hooks_installed, install_hooks, preview_hook_config, refresh_wsl_hooks, remove_hooks,
 };
 use deva_light::http_server::HttpServerController;
 use deva_light::logging::log_info;
+use deva_light::monitoring::{is_monitoring_paused, set_monitoring_paused};
+use deva_light::remote::{build_remote_setup_info, RemoteSetupInfo};
 use deva_light::types::LightState;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -171,10 +171,12 @@ pub fn get_app_config() -> AppConfigView {
         .map(|entry| SshRemoteTargetView {
             target: entry.target.clone(),
             identity_file: entry.identity_file.clone(),
-            label: entry
-                .label
-                .clone()
-                .or_else(|| config.origin_aliases.get(&format!("ssh:{}", entry.target)).cloned()),
+            label: entry.label.clone().or_else(|| {
+                config
+                    .origin_aliases
+                    .get(&format!("ssh:{}", entry.target))
+                    .cloned()
+            }),
             passphrase: entry.passphrase.clone(),
         })
         .collect();
@@ -350,6 +352,9 @@ pub fn set_always_on_top(
         .get_webview_window("main")
         .ok_or_else(|| "main window not available".to_string())?;
 
+    let _ = window.set_visible_on_all_workspaces(true);
+    let _ = window.set_skip_taskbar(true);
+
     let pin_window = enabled && aggregator.has_active_lights();
     window
         .set_always_on_top(pin_window)
@@ -501,11 +506,7 @@ pub fn test_ssh_connection(
                 .and_then(|entry| entry.passphrase.clone())
         });
 
-    deva_light::ssh_remote::test_ssh_connection(
-        &target,
-        identity.as_deref(),
-        passphrase.as_deref(),
-    )
+    deva_light::ssh_remote::test_ssh_connection(&target, identity.as_deref(), passphrase.as_deref())
 }
 
 #[tauri::command]
@@ -540,9 +541,7 @@ pub fn dismiss_ssh_discovery(candidate_id: String) -> Result<(), String> {
         .iter()
         .any(|id| id == trimmed)
     {
-        config
-            .ssh_discovery_dismissed
-            .push(trimmed.to_string());
+        config.ssh_discovery_dismissed.push(trimmed.to_string());
         save_app_config(&config).map_err(|error| error.to_string())?;
     }
 
@@ -608,6 +607,9 @@ pub fn resize_main_window(app: AppHandle, width: f64, height: f64) -> Result<(),
     window
         .set_size(Size::Logical(LogicalSize::new(width, height)))
         .map_err(|error| error.to_string())?;
+
+    let _ = window.set_visible_on_all_workspaces(true);
+    let _ = window.set_skip_taskbar(true);
 
     keep_window_on_current_monitor(&window)?;
     Ok(())
