@@ -676,6 +676,14 @@ button.wide {
   background: rgba(0, 0, 0, 0.18);
 }
 
+.ssh-target-empty {
+  padding: 12px 14px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  color: var(--text-muted);
+  background: rgba(0, 0, 0, 0.12);
+}
+
 .ssh-target-actions {
   display: flex;
   flex-wrap: wrap;

@@ -44,7 +44,10 @@ fn hook_http_server_drives_session_lifecycle() {
 
     post_event(port, r#"{"event_type":"stop","session_id":"s1"}"#);
 
-    eventually(|| aggregator.get_lights().is_empty());
+    eventually(|| {
+        let lights = aggregator.get_lights();
+        lights.len() == 1 && lights[0].status == Status::Done
+    });
 
     post_event(port, r#"{"event_type":"prompt-submit","session_id":"s1"}"#);
 

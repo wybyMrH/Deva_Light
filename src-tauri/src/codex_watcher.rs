@@ -948,10 +948,11 @@ mod tests {
         .unwrap();
 
         poll_rollout_root(&aggregator, &mut files, false, &root).unwrap();
-        assert!(
-            aggregator.get_lights().is_empty(),
-            "completed codex tasks should auto-hide from the lamp strip"
-        );
+        let lights = aggregator.get_lights();
+        assert_eq!(lights.len(), 1);
+        assert_eq!(lights[0].status, Status::Done);
+        assert!(aggregator.prune_expired_done_lights(Duration::ZERO));
+        assert!(aggregator.get_lights().is_empty());
 
         let _ = fs::remove_dir_all(root);
         let _ = fs::remove_dir_all(project);
@@ -979,7 +980,9 @@ mod tests {
         let aggregator = StateAggregator::new();
         let mut files = HashMap::new();
         poll_rollout_root(&aggregator, &mut files, false, &root).unwrap();
-        assert!(aggregator.get_lights().is_empty());
+        let lights = aggregator.get_lights();
+        assert_eq!(lights.len(), 1);
+        assert_eq!(lights[0].status, Status::Done);
 
         fs::write(
             &rollout,
@@ -1139,6 +1142,10 @@ mod tests {
 
         poll_rollout_root(&aggregator, &mut files, false, &root).unwrap();
 
+        let lights = aggregator.get_lights();
+        assert_eq!(lights.len(), 1);
+        assert_eq!(lights[0].status, Status::Done);
+        assert!(aggregator.prune_expired_done_lights(Duration::ZERO));
         assert!(aggregator.get_lights().is_empty());
 
         let _ = fs::remove_dir_all(root);

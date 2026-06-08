@@ -104,10 +104,14 @@ impl LightState {
             .unwrap_or(Status::Idle);
     }
 
-    /// A lamp is shown only while at least one session needs attention or is working.
+    /// A lamp is shown while it needs attention, is working, or is in its
+    /// post-completion red-light retention window.
     pub fn is_active(&self) -> bool {
-        self.sessions
-            .iter()
-            .any(|session| matches!(session.status, Status::Working | Status::Waiting))
+        self.sessions.iter().any(|session| {
+            matches!(
+                session.status,
+                Status::Working | Status::Waiting | Status::Done
+            )
+        })
     }
 }

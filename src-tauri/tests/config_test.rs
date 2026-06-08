@@ -24,6 +24,10 @@ fn app_config_defaults_match_mvp_startup_state() {
     assert!(!config.hooks_installed);
     assert_eq!(config.http_bind, "127.0.0.1");
     assert_eq!(config.http_port, None);
+    assert!(!config.notifications_enabled);
+    assert!(config.notify_on_waiting);
+    assert!(!config.notify_on_done);
+    assert!(!config.done_light_auto_dismiss);
     assert!(config.codex_session_paths.is_empty());
 }
 
@@ -36,6 +40,8 @@ fn app_config_deserializes_old_documents_with_defaults() {
     assert_eq!(parsed.window_y, 260);
     assert_eq!(parsed.http_bind, "127.0.0.1");
     assert_eq!(parsed.http_port, None);
+    assert!(!parsed.notifications_enabled);
+    assert!(!parsed.done_light_auto_dismiss);
     assert!(parsed.codex_session_paths.is_empty());
 }
 

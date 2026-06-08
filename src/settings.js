@@ -28,6 +28,7 @@ const copyDiagnosticsButton = document.getElementById("copy-diagnostics");
 const openAppLogButton = document.getElementById("open-app-log");
 
 const alwaysOnTopCheckbox = document.getElementById("always-on-top");
+const autoDismissDoneCheckbox = document.getElementById("auto-dismiss-done");
 const sshTargetsListEl = document.getElementById("ssh-targets-list");
 const addSshTargetButton = document.getElementById("add-ssh-target");
 const sshDiscoveryBannerEl = document.getElementById("ssh-discovery-banner");
@@ -220,12 +221,13 @@ async function loadSettings() {
 
     alwaysOnTopCheckbox.checked = config.alwaysOnTop ?? true;
     setDisplayMode(config.displayMode || "parallel");
+    autoDismissDoneCheckbox.checked = config.doneLightAutoDismiss ?? false;
     renderSshTargets(config.remoteSshTargets || []);
     originAliasesInput.value = formatOriginAliases(config.originAliases || []);
     remoteCodexViaSshCheckbox.checked = config.remoteCodexViaSsh ?? true;
     httpTokenEl.textContent = config.httpToken || "未启用";
 
-    notificationsEnabledCheckbox.checked = config.notificationsEnabled ?? true;
+    notificationsEnabledCheckbox.checked = config.notificationsEnabled ?? false;
     notifyWaitingCheckbox.checked = config.notifyOnWaiting ?? true;
     notifyDoneCheckbox.checked = config.notifyOnDone ?? false;
     syncNotificationOptions();
@@ -258,6 +260,7 @@ async function saveSettings() {
         httpBind: getHttpBind(),
         httpPort,
         alwaysOnTop: alwaysOnTopCheckbox.checked,
+        doneLightAutoDismiss: autoDismissDoneCheckbox.checked,
         notificationsEnabled: notificationsEnabledCheckbox.checked,
         notifyOnWaiting: notifyWaitingCheckbox.checked,
         notifyOnDone: notifyDoneCheckbox.checked,
@@ -450,8 +453,8 @@ function reportUpdate(message, ok) {
 
 function renderSshTargets(targets) {
   sshTargetsListEl.replaceChildren();
-  const rows = targets.length > 0 ? targets : [{ target: "", identityFile: null }];
-  rows.forEach((entry) => addSshTargetRow(entry));
+  targets.forEach((entry) => addSshTargetRow(entry));
+  syncSshTargetEmptyState();
 }
 
 function formatOriginAliases(entries) {
@@ -479,6 +482,7 @@ function parseOriginAliases() {
 function addSshTargetRow(
   entry = { target: "", identityFile: null, label: null, passphrase: null },
 ) {
+  removeSshTargetEmptyState();
   const row = document.createElement("div");
   row.className = "ssh-target-row";
 
@@ -553,14 +557,8 @@ function addSshTargetRow(
   removeButton.className = "danger";
   removeButton.textContent = "删除";
   removeButton.addEventListener("click", () => {
-    if (sshTargetsListEl.children.length <= 1) {
-      targetInput.value = "";
-      identityInput.value = "";
-      passphraseInput.value = "";
-      labelInput.value = "";
-      return;
-    }
     row.remove();
+    syncSshTargetEmptyState();
   });
 
   const status = document.createElement("output");
@@ -571,6 +569,26 @@ function addSshTargetRow(
   row.append(targetField, identityField, passphraseField, labelField, actions);
   sshTargetsListEl.appendChild(row);
   return row;
+}
+
+function syncSshTargetEmptyState() {
+  if (sshTargetsListEl.querySelector(".ssh-target-row")) {
+    removeSshTargetEmptyState();
+    return;
+  }
+
+  if (sshTargetsListEl.querySelector(".ssh-target-empty")) {
+    return;
+  }
+
+  const empty = document.createElement("div");
+  empty.className = "ssh-target-empty";
+  empty.textContent = "尚未添加 SSH 主机。点击下方按钮添加后再测试连接。";
+  sshTargetsListEl.appendChild(empty);
+}
+
+function removeSshTargetEmptyState() {
+  sshTargetsListEl.querySelector(".ssh-target-empty")?.remove();
 }
 
 function collectSshTargets() {
@@ -975,7 +993,14 @@ async function refreshDiagnostics() {
     "无缺失路径。",
   );
   renderDiagnosticsPaths(diagnostics);
-  recentLog.textContent = diagnostics?.recentLog || "(空)";
+  renderRecentLog(diagnostics?.recentLog || "(空)");
+}
+
+function renderRecentLog(text) {
+  recentLog.textContent = text;
+  requestAnimationFrame(() => {
+    recentLog.scrollTop = recentLog.scrollHeight;
+  });
 }
 
 function renderDiagnosticsPaths(diagnostics) {
@@ -1141,6 +1166,7 @@ function setBusy(isBusy) {
   setControlDisabled(portInput, isBusy);
   setControlDisabled(codexManualPathsInput, isBusy);
   setControlDisabled(alwaysOnTopCheckbox, isBusy);
+  setControlDisabled(autoDismissDoneCheckbox, isBusy);
   setControlDisabled(notificationsEnabledCheckbox, isBusy);
   setControlDisabled(notifyWaitingCheckbox, isBusy);
   setControlDisabled(notifyDoneCheckbox, isBusy);

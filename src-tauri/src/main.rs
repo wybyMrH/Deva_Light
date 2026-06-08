@@ -9,11 +9,14 @@ use deva_light::types::Status;
 use deva_light::window_behavior::{apply_main_window_pin, configure_main_window_workspace};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
     Emitter, Manager, WindowEvent,
 };
+use tauri_plugin_notification::NotificationExt;
 
 mod ipc;
 
@@ -180,7 +183,18 @@ fn main() {
                         Status::Done => "任务已完成".to_string(),
                         _ => String::new(),
                     };
-                    let _ = app_handle.emit("notify-status", (title, body));
+                    if let Err(error) = app_handle
+                        .notification()
+                        .builder()
+                        .title(title)
+                        .body(body)
+                        .show()
+                    {
+                        log_warn(
+                            "notification",
+                            format!("failed to show notification: {error}"),
+                        );
+                    }
                 }
 
                 last_statuses.retain(|project_id, _| {
@@ -194,6 +208,7 @@ fn main() {
             deva_light::codex_watcher::start_codex_watcher(Arc::clone(&aggregator))?;
             deva_light::claude_watcher::start_claude_watcher(Arc::clone(&aggregator));
             deva_light::cursor_watcher::start_cursor_watcher(Arc::clone(&aggregator));
+            start_done_light_cleanup(Arc::clone(&aggregator));
             log_info("app", "watchers started");
 
             window.emit("state-changed", aggregator.get_lights())?;
@@ -262,4 +277,11 @@ fn setup_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> 
         .build(&app_handle)?;
 
     Ok(())
+}
+
+fn start_done_light_cleanup(aggregator: Arc<StateAggregator>) {
+    thread::spawn(move || loop {
+        thread::sleep(Duration::from_secs(1));
+        aggregator.prune_expired_done_lights(ipc::done_light_retention());
+    });
 }

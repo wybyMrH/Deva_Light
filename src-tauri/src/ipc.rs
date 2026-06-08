@@ -51,6 +51,7 @@ pub struct AppConfigView {
     pub notifications_enabled: bool,
     pub notify_on_waiting: bool,
     pub notify_on_done: bool,
+    pub done_light_auto_dismiss: bool,
     pub codex_manual_paths: Vec<String>,
     pub display_mode: String,
     pub remote_ssh_targets: Vec<SshRemoteTargetView>,
@@ -91,6 +92,7 @@ pub struct AppConfigUpdate {
     pub notifications_enabled: Option<bool>,
     pub notify_on_waiting: Option<bool>,
     pub notify_on_done: Option<bool>,
+    pub done_light_auto_dismiss: Option<bool>,
     pub codex_manual_paths: Option<Vec<String>>,
     pub display_mode: Option<String>,
     pub remote_ssh_targets: Option<Vec<SshRemoteTargetView>>,
@@ -122,6 +124,7 @@ pub fn remove_light(project_id: String, aggregator: State<Arc<StateAggregator>>)
 
 #[tauri::command]
 pub fn get_lights(aggregator: State<Arc<StateAggregator>>) -> Vec<LightState> {
+    aggregator.prune_expired_done_lights(done_light_retention());
     aggregator.get_lights()
 }
 
@@ -199,6 +202,7 @@ pub fn get_app_config() -> AppConfigView {
         notifications_enabled: config.notifications_enabled,
         notify_on_waiting: config.notify_on_waiting,
         notify_on_done: config.notify_on_done,
+        done_light_auto_dismiss: config.done_light_auto_dismiss,
         codex_manual_paths: config.codex_session_paths,
         display_mode: display_mode_to_string(&config.display_mode),
         remote_ssh_targets,
@@ -250,6 +254,9 @@ pub fn save_app_config_command(
     }
     if let Some(notify_on_done) = update.notify_on_done {
         config.notify_on_done = notify_on_done;
+    }
+    if let Some(done_light_auto_dismiss) = update.done_light_auto_dismiss {
+        config.done_light_auto_dismiss = done_light_auto_dismiss;
     }
     if let Some(codex_manual_paths) = update.codex_manual_paths {
         config.codex_session_paths = normalize_codex_manual_paths(codex_manual_paths);
@@ -648,6 +655,14 @@ fn keep_window_on_current_monitor(window: &tauri::WebviewWindow) -> Result<(), S
     }
 
     Ok(())
+}
+
+pub fn done_light_retention() -> std::time::Duration {
+    if load_app_config().done_light_auto_dismiss {
+        std::time::Duration::from_secs(15)
+    } else {
+        std::time::Duration::from_secs(120)
+    }
 }
 
 fn validate_http_bind(bind: &str) -> Result<(), String> {

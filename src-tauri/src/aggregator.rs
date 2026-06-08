@@ -5,7 +5,7 @@ use crate::types::{LightState, SessionRef, Status, Tool};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 #[derive(Default)]
 struct AggregatorState {
@@ -80,7 +80,6 @@ impl StateAggregator {
             light.aggregate_status();
 
             state.session_to_light.insert(session_id, light_id.clone());
-            purge_completed_light(&mut state, &light_id);
         }
 
         self.notify_change();
@@ -112,7 +111,6 @@ impl StateAggregator {
                     session.status = new_status;
                     light.last_event_at = Instant::now();
                     light.aggregate_status();
-                    purge_completed_light(&mut state, &light_id);
                     changed = true;
                 }
             }
@@ -162,8 +160,6 @@ impl StateAggregator {
 
             if should_remove {
                 remove_light_by_id(&mut state, &light_id);
-            } else {
-                purge_completed_light(&mut state, &light_id);
             }
             changed = true;
         }
@@ -314,6 +310,38 @@ impl StateAggregator {
         state.lights.values().any(|light| light.is_active())
     }
 
+    pub fn prune_expired_done_lights(&self, retention: Duration) -> bool {
+        let mut removed = false;
+
+        {
+            let mut state = self.state.write().expect("aggregator state lock poisoned");
+            let now = Instant::now();
+            let expired_light_ids: Vec<String> = state
+                .lights
+                .iter()
+                .filter(|(_, light)| {
+                    !light.sessions.is_empty()
+                        && light
+                            .sessions
+                            .iter()
+                            .all(|session| session.status == Status::Done)
+                        && now.saturating_duration_since(light.last_event_at) >= retention
+                })
+                .map(|(light_id, _)| light_id.clone())
+                .collect();
+
+            for light_id in expired_light_ids {
+                removed |= remove_light_by_id(&mut state, &light_id);
+            }
+        }
+
+        if removed {
+            self.notify_change();
+        }
+
+        removed
+    }
+
     pub fn set_task_name(&self, session_id: &str, task_name: String) {
         let display = summarize_task_name(task_name);
         let mut changed = false;
@@ -424,20 +452,6 @@ fn summarize_task_name(task_name: String) -> String {
     }
 }
 
-fn purge_completed_light(state: &mut AggregatorState, light_id: &str) {
-    let should_remove = state.lights.get(light_id).is_some_and(|light| {
-        !light.sessions.is_empty()
-            && light
-                .sessions
-                .iter()
-                .all(|session| session.status == Status::Done)
-    });
-
-    if should_remove {
-        remove_light_by_id(state, light_id);
-    }
-}
-
 fn remove_light_by_id(state: &mut AggregatorState, light_id: &str) -> bool {
     let mut removed = false;
 
@@ -477,6 +491,11 @@ mod tests {
         assert_eq!(agg.get_lights().len(), 1);
 
         agg.update_session_status("idle-session", Status::Done);
+        let lights = agg.get_lights();
+        assert_eq!(lights.len(), 1);
+        assert_eq!(lights[0].status, Status::Done);
+
+        assert!(agg.prune_expired_done_lights(Duration::ZERO));
         assert!(agg.get_lights().is_empty());
     }
 

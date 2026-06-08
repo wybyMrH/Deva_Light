@@ -1,6 +1,7 @@
 use deva_light::aggregator::StateAggregator;
 use deva_light::types::{Status, Tool};
 use std::path::PathBuf;
+use std::time::Duration;
 
 #[test]
 fn add_session_creates_project_light() {
@@ -23,6 +24,12 @@ fn update_session_status_reaggregates_light() {
     agg.add_session("s1".to_string(), Tool::ClaudeCode, &cwd, Status::Working);
     agg.update_session_status("s1", Status::Done);
 
+    let lights = agg.get_lights();
+    assert_eq!(lights.len(), 1);
+    assert_eq!(lights[0].status, Status::Done);
+    assert_eq!(agg.session_status("s1"), Some(Status::Done));
+
+    assert!(agg.prune_expired_done_lights(Duration::ZERO));
     assert!(agg.get_lights().is_empty());
     assert_eq!(agg.session_status("s1"), None);
 }
@@ -126,6 +133,14 @@ fn preserves_first_seen_project_order() {
         .map(|light| light.project_label.clone())
         .collect();
 
+    assert_eq!(labels, vec!["first", "second"]);
+
+    assert!(agg.prune_expired_done_lights(Duration::ZERO));
+    let labels: Vec<_> = agg
+        .get_lights()
+        .iter()
+        .map(|light| light.project_label.clone())
+        .collect();
     assert_eq!(labels, vec!["second"]);
 
     agg.add_session(

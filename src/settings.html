@@ -43,9 +43,16 @@
               <label class="row toggle-row">
                 <span>
                   <strong>始终置顶</strong>
-                  <small>仅在有 Working / Waiting 任务时置顶，空闲时自动取消</small>
+                  <small>仅在有可见灯时置顶，空闲时自动取消</small>
                 </span>
                 <input id="always-on-top" type="checkbox" class="switch" checked />
+              </label>
+              <label class="row toggle-row">
+                <span>
+                  <strong>完成红灯自动收起</strong>
+                  <small>关闭时红灯保留 2 分钟，可点击立即移除；开启时 15 秒后自动消失</small>
+                </span>
+                <input id="auto-dismiss-done" type="checkbox" class="switch" />
               </label>
               <div class="row stack-row">
                 <span>
@@ -65,9 +72,9 @@
               <label class="row toggle-row">
                 <span>
                   <strong>启用系统通知</strong>
-                  <small>状态变化时弹出桌面通知</small>
+                  <small>状态变化时调用操作系统桌面通知</small>
                 </span>
-                <input id="notifications-enabled" type="checkbox" class="switch" checked />
+                <input id="notifications-enabled" type="checkbox" class="switch" />
               </label>
               <div class="sub-options" id="notification-options">
                 <label class="row toggle-row compact">
