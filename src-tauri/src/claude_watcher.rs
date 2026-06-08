@@ -1,6 +1,6 @@
 use crate::aggregator::StateAggregator;
-use crate::monitoring::is_monitoring_paused;
 use crate::logging::log_info;
+use crate::monitoring::is_monitoring_paused;
 use crate::types::{Status, Tool};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -180,9 +180,7 @@ fn home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-fn scan_session_files(
-    dir: &Path,
-) -> Result<Vec<(String, ClaudeSessionFile)>, std::io::Error> {
+fn scan_session_files(dir: &Path) -> Result<Vec<(String, ClaudeSessionFile)>, std::io::Error> {
     if !dir.exists() {
         return Ok(Vec::new());
     }
@@ -243,9 +241,7 @@ fn is_process_alive(pid: i32) -> bool {
             fn CloseHandle(hObject: *mut std::ffi::c_void) -> i32;
         }
 
-        let handle = unsafe {
-            OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid as u32)
-        };
+        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid as u32) };
 
         if handle.is_null() {
             return false;

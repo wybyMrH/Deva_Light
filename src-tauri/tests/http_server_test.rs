@@ -99,4 +99,3 @@ fn cursor_pre_tool_use_resolves_to_waiting() {
 
     assert_eq!(event.resolve_status(), Some(Status::Waiting));
 }
-

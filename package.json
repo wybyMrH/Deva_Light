@@ -1,6 +1,6 @@
 {
   "name": "ai-light",
-  "version": "0.1.20",
+  "version": "0.1.21",
   "private": true,
   "scripts": {
     "dev": "npx @tauri-apps/cli@2 dev",

@@ -39,8 +39,12 @@ pub fn build_remote_setup_info() -> Result<RemoteSetupInfo, String> {
     let runtime_port = crate::config::load_runtime_config().map(|runtime| runtime.http_port);
     let port = config.http_port.or(runtime_port).unwrap_or(17_321);
     let addresses = detect_local_addresses();
-    let host = select_primary_host(&config, &addresses)
-        .unwrap_or_else(|| addresses.first().cloned().unwrap_or_else(|| "127.0.0.1".to_string()));
+    let host = select_primary_host(&config, &addresses).unwrap_or_else(|| {
+        addresses
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "127.0.0.1".to_string())
+    });
     let event_url = format!("http://{host}:{port}/events");
 
     let install_command = build_install_command(&event_url, token.as_deref());
@@ -49,8 +53,10 @@ pub fn build_remote_setup_info() -> Result<RemoteSetupInfo, String> {
         .normalized_ssh_targets()
         .into_iter()
         .map(|entry| {
-            let ssh_install_command =
-                Some(build_ssh_install_command(&entry.target, &curl_install_command));
+            let ssh_install_command = Some(build_ssh_install_command(
+                &entry.target,
+                &curl_install_command,
+            ));
             let ssh_codex_path = config
                 .remote_codex_via_ssh
                 .then(|| discover_codex_sessions_dir(&entry.target))

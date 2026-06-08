@@ -209,7 +209,11 @@ pub fn decode_cursor_project_slug(slug: &str) -> Option<PathBuf> {
         if let Some(path) = resolve_path_from_segments(&segments[1..], &base) {
             return Some(path);
         }
-        return Some(PathBuf::from(format!("{}/{}", base, segments[1..].join("/"))));
+        return Some(PathBuf::from(format!(
+            "{}/{}",
+            base,
+            segments[1..].join("/")
+        )));
     }
 
     if slug.len() >= 3 {

@@ -1,7 +1,5 @@
 use crate::config::load_app_config;
-use crate::monitor_origin::{
-    compose_light_id, resolve_origin_display, resolve_origin_identity,
-};
+use crate::monitor_origin::{compose_light_id, resolve_origin_display, resolve_origin_identity};
 use crate::project::identify_project;
 use crate::types::{LightState, SessionRef, Status, Tool};
 use std::collections::HashMap;
@@ -313,10 +311,7 @@ impl StateAggregator {
 
     pub fn has_active_lights(&self) -> bool {
         let state = self.state.read().expect("aggregator state lock poisoned");
-        state
-            .lights
-            .values()
-            .any(|light| light.is_active())
+        state.lights.values().any(|light| light.is_active())
     }
 
     pub fn set_task_name(&self, session_id: &str, task_name: String) {
@@ -504,8 +499,12 @@ mod tests {
 
         let lights = agg.get_lights();
         assert_eq!(lights.len(), 2);
-        assert!(lights.iter().any(|light| light.monitor_origin == MonitorOrigin::Local));
+        assert!(lights
+            .iter()
+            .any(|light| light.monitor_origin == MonitorOrigin::Local));
         #[cfg(target_os = "windows")]
-        assert!(lights.iter().any(|light| light.monitor_origin == MonitorOrigin::Remote));
+        assert!(lights
+            .iter()
+            .any(|light| light.monitor_origin == MonitorOrigin::Remote));
     }
 }

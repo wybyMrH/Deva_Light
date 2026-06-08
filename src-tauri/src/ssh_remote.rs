@@ -86,8 +86,15 @@ pub fn list_rollout_files(root: &Path) -> Result<Vec<PathBuf>, String> {
     )?;
 
     let mut files = Vec::new();
-    for line in output.lines().map(str::trim).filter(|line| !line.is_empty()) {
-        files.push(build_ssh_virtual_path(&target, line.trim_start_matches('/')));
+    for line in output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        files.push(build_ssh_virtual_path(
+            &target,
+            line.trim_start_matches('/'),
+        ));
     }
 
     files.sort();
@@ -226,7 +233,8 @@ fn classify_ssh_error(stderr: &str) -> String {
         "主机密钥未信任：请先在终端手动 ssh 连接一次".to_string()
     } else if lower.contains("connection refused") {
         "连接被拒绝：请确认 SSH 服务已启动且端口正确".to_string()
-    } else if lower.contains("could not resolve hostname") || lower.contains("name or service not known")
+    } else if lower.contains("could not resolve hostname")
+        || lower.contains("name or service not known")
     {
         "无法解析主机名，请检查 SSH 目标格式".to_string()
     } else if lower.contains("network is unreachable") || lower.contains("no route to host") {
@@ -259,7 +267,11 @@ fn run_ssh(
     let identity_file = auth_override
         .identity_file
         .filter(|value| !value.trim().is_empty())
-        .or_else(|| config_entry.as_ref().and_then(|entry| entry.identity_file.clone()));
+        .or_else(|| {
+            config_entry
+                .as_ref()
+                .and_then(|entry| entry.identity_file.clone())
+        });
 
     let passphrase = auth_override
         .passphrase
@@ -314,21 +326,15 @@ fn write_askpass_helper(passphrase: &str) -> Result<PathBuf, String> {
     #[cfg(windows)]
     {
         let escaped = passphrase.replace('%', "%%").replace('"', "\"\"");
-        fs::write(
-            &askpass_path,
-            format!("@echo off\r\necho {escaped}\r\n"),
-        )
-        .map_err(|error| format!("failed to write ssh askpass helper: {error}"))?;
+        fs::write(&askpass_path, format!("@echo off\r\necho {escaped}\r\n"))
+            .map_err(|error| format!("failed to write ssh askpass helper: {error}"))?;
     }
 
     #[cfg(not(windows))]
     {
         let escaped = passphrase.replace('\'', "'\\''");
-        fs::write(
-            &askpass_path,
-            format!("#!/bin/sh\necho '{escaped}'\n"),
-        )
-        .map_err(|error| format!("failed to write ssh askpass helper: {error}"))?;
+        fs::write(&askpass_path, format!("#!/bin/sh\necho '{escaped}'\n"))
+            .map_err(|error| format!("failed to write ssh askpass helper: {error}"))?;
         use std::os::unix::fs::PermissionsExt;
         let mut perms = fs::metadata(&askpass_path)
             .map_err(|error| error.to_string())?

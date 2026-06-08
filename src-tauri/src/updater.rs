@@ -95,7 +95,8 @@ pub async fn download_and_install(app: &AppHandle) -> Result<(), String> {
         "updater",
         format!(
             "downloading update {} (current {})",
-            update.version, app.package_info().version
+            update.version,
+            app.package_info().version
         ),
     );
 
@@ -107,8 +108,7 @@ pub async fn download_and_install(app: &AppHandle) -> Result<(), String> {
     update
         .download_and_install(
             move |chunk_length, content_length| {
-                let total = downloaded
-                    .fetch_add(chunk_length as u64, Ordering::Relaxed)
+                let total = downloaded.fetch_add(chunk_length as u64, Ordering::Relaxed)
                     + chunk_length as u64;
                 let _ = app_handle.emit(
                     "update-download-progress",
@@ -165,10 +165,7 @@ pub fn spawn_startup_update_check(app: &AppHandle) {
             }
             Ok(None) => {}
             Err(error) => {
-                log_warn(
-                    "updater",
-                    format!("startup update check failed: {error}"),
-                );
+                log_warn("updater", format!("startup update check failed: {error}"));
             }
         }
     });

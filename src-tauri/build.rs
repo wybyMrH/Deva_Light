@@ -68,6 +68,5 @@ fn is_up_to_date(source: &Path, destination: &Path) -> bool {
     };
 
     dest_modified >= source_modified
-        || dest_modified >= SystemTime::UNIX_EPOCH
-            && source_modified <= dest_modified
+        || dest_modified >= SystemTime::UNIX_EPOCH && source_modified <= dest_modified
 }

@@ -313,7 +313,10 @@ pub fn remove_hooks() -> Result<(), Box<dyn std::error::Error>> {
         fs::remove_file(hook_path)?;
     }
 
-    log_info("hook_installer", "removed Claude/Cursor hooks and helper binary");
+    log_info(
+        "hook_installer",
+        "removed Claude/Cursor hooks and helper binary",
+    );
     Ok(())
 }
 
@@ -408,12 +411,7 @@ fn install_wsl_hooks() -> Result<(), Box<dyn std::error::Error>> {
             let _ = fs::copy(&settings_path, backup_path);
         }
 
-        let merged = merge_wsl_hooks(
-            existing,
-            &wsl_hook_path,
-            runtime.http_port,
-            http_token,
-        )?;
+        let merged = merge_wsl_hooks(existing, &wsl_hook_path, runtime.http_port, http_token)?;
         fs::write(&settings_path, serde_json::to_string_pretty(&merged)?)?;
         installed += 1;
         log_info(

@@ -194,7 +194,10 @@ fn resolve_tool_call(payload: &serde_json::Value) -> Option<String> {
 }
 
 fn resolve_task_hint(payload: &serde_json::Value) -> Option<String> {
-    extract_string(payload, &["prompt", "task", "user_prompt", "message", "description"])
+    extract_string(
+        payload,
+        &["prompt", "task", "user_prompt", "message", "description"],
+    )
 }
 
 fn normalize_event_type(event_type: &str) -> String {
@@ -313,10 +316,7 @@ mod tests {
             resolve_session_id(&payload, "before-shell-execution"),
             "conv-123"
         );
-        assert_eq!(
-            resolve_event_type(None, &payload),
-            "before-shell-execution"
-        );
+        assert_eq!(resolve_event_type(None, &payload), "before-shell-execution");
     }
 
     #[test]
@@ -339,9 +339,6 @@ mod tests {
             "workspace_roots": ["/home/user/project"]
         });
 
-        assert_eq!(
-            resolve_cwd(&payload).as_deref(),
-            Some("/home/user/project")
-        );
+        assert_eq!(resolve_cwd(&payload).as_deref(), Some("/home/user/project"));
     }
 }

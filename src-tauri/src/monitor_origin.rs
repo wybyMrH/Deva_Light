@@ -128,7 +128,11 @@ pub fn resolve_origin_display(
     identity: &OriginIdentity,
     aliases: &HashMap<String, String>,
 ) -> String {
-    if let Some(alias) = aliases.get(&identity.key).map(|value| value.trim()).filter(|value| !value.is_empty()) {
+    if let Some(alias) = aliases
+        .get(&identity.key)
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
         return alias.to_string();
     }
 
@@ -144,14 +148,20 @@ fn wsl_distro_from_path(path: &Path) -> Option<String> {
     let lower = normalized.to_ascii_lowercase();
 
     if lower.starts_with("//wsl.localhost/") || lower.starts_with("//wsl$/") {
-        let segments: Vec<&str> = normalized.split('/').filter(|part| !part.is_empty()).collect();
+        let segments: Vec<&str> = normalized
+            .split('/')
+            .filter(|part| !part.is_empty())
+            .collect();
         if segments.len() >= 3 {
             return Some(segments[2].to_string());
         }
     }
 
     if lower.starts_with("wsl://") {
-        let segments: Vec<&str> = normalized.split('/').filter(|part| !part.is_empty()).collect();
+        let segments: Vec<&str> = normalized
+            .split('/')
+            .filter(|part| !part.is_empty())
+            .collect();
         if segments.len() >= 2 {
             return Some(segments[1].to_string());
         }
@@ -163,7 +173,6 @@ fn wsl_distro_from_path(path: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     #[test]
     fn detects_windows_local_path() {

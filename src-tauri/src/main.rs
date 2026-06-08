@@ -6,6 +6,7 @@ use deva_light::config::load_app_config;
 use deva_light::http_server::{existing_instance_is_healthy, HttpServerController};
 use deva_light::logging::{log_error, log_info, log_warn};
 use deva_light::types::Status;
+use deva_light::window_behavior::{apply_main_window_pin, configure_main_window_workspace};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tauri::{
@@ -117,7 +118,7 @@ fn main() {
             )));
 
             // Pin only while active tasks exist; preference is applied in on_change.
-            let _ = window.set_always_on_top(false);
+            let _ = apply_main_window_pin(&window, false);
             log_info(
                 "app",
                 format!(
@@ -147,8 +148,7 @@ fn main() {
 
                 let config = load_app_config();
                 let pin_window = config.always_on_top && emit_aggregator.has_active_lights();
-                configure_main_window_workspace(&emit_window);
-                let _ = emit_window.set_always_on_top(pin_window);
+                let _ = apply_main_window_pin(&emit_window, pin_window);
 
                 if !config.notifications_enabled {
                     return;
@@ -262,9 +262,4 @@ fn setup_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> 
         .build(&app_handle)?;
 
     Ok(())
-}
-
-fn configure_main_window_workspace(window: &tauri::WebviewWindow) {
-    let _ = window.set_visible_on_all_workspaces(true);
-    let _ = window.set_skip_taskbar(true);
 }

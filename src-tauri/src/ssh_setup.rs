@@ -36,9 +36,10 @@ pub struct SshSetupGuide {
 pub fn build_ssh_setup_guide() -> SshSetupGuide {
     let home = home_dir_display();
     SshSetupGuide {
-        generate_key_command: "ssh-keygen -t ed25519 -C \"deva-light\" -f ~/.ssh/id_ed25519".to_string(),
-        copy_key_command_template:
-            "ssh-copy-id -i ~/.ssh/id_ed25519.pub user@192.168.1.10".to_string(),
+        generate_key_command: "ssh-keygen -t ed25519 -C \"deva-light\" -f ~/.ssh/id_ed25519"
+            .to_string(),
+        copy_key_command_template: "ssh-copy-id -i ~/.ssh/id_ed25519.pub user@192.168.1.10"
+            .to_string(),
         test_command_template: "ssh -i ~/.ssh/id_ed25519 user@192.168.1.10 echo ok".to_string(),
         windows_agent_commands: vec![
             "Get-Service ssh-agent | Set-Service -StartupType Manual".to_string(),
@@ -66,10 +67,7 @@ pub fn read_ssh_public_key(identity_path: &str) -> Result<String, String> {
     };
 
     if !public_key.is_file() {
-        return Err(format!(
-            "未找到公钥文件：{}",
-            public_key.to_string_lossy()
-        ));
+        return Err(format!("未找到公钥文件：{}", public_key.to_string_lossy()));
     }
 
     fs::read_to_string(&public_key).map_err(|error| error.to_string())
@@ -80,7 +78,13 @@ pub fn discover_ssh_key_candidates() -> Vec<SshKeyCandidate> {
     let mut seen = HashMap::new();
 
     if let Some(windows_ssh) = windows_ssh_dir() {
-        push_ssh_dir_candidates(&mut candidates, &mut seen, &windows_ssh, "windows", "Windows 本机");
+        push_ssh_dir_candidates(
+            &mut candidates,
+            &mut seen,
+            &windows_ssh,
+            "windows",
+            "Windows 本机",
+        );
     }
 
     #[cfg(target_os = "windows")]
@@ -117,9 +121,9 @@ fn push_ssh_dir_candidates(
             .and_then(|name| name.to_str())
             .unwrap_or("id_ed25519");
         let public_key = ssh_dir.join(format!("{file_name}.pub"));
-        let public_key_path = public_key.exists().then(|| {
-            public_key.to_string_lossy().to_string()
-        });
+        let public_key_path = public_key
+            .exists()
+            .then(|| public_key.to_string_lossy().to_string());
 
         let display_path = display_identity_path(&identity_path, source);
         let id = format!("{source}:{display_path}");
@@ -254,7 +258,10 @@ impl ParsedSshHost {
 
         let hostname = self.hostname.unwrap_or_else(|| self.host_alias.clone());
         let user = self.user.unwrap_or_else(|| "root".to_string());
-        let port = self.port.map(|value| format!(":{value}")).unwrap_or_default();
+        let port = self
+            .port
+            .map(|value| format!(":{value}"))
+            .unwrap_or_default();
         let target = format!("{user}@{hostname}{port}");
 
         Some(SshHostHint {
@@ -292,7 +299,8 @@ fn default_identity_names() -> [&'static str; 2] {
 }
 
 fn paths_equivalent(left: &str, right: &str) -> bool {
-    left.replace('\\', "/").eq_ignore_ascii_case(&right.replace('\\', "/"))
+    left.replace('\\', "/")
+        .eq_ignore_ascii_case(&right.replace('\\', "/"))
 }
 
 fn display_identity_path(path: &str, source: &str) -> String {

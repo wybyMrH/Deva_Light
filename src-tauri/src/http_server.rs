@@ -24,7 +24,13 @@ pub struct HookEvent {
     pub cwd: Option<String>,
     #[serde(default, alias = "tool", alias = "toolName", alias = "tool_name")]
     pub tool_call: Option<String>,
-    #[serde(default, alias = "prompt", alias = "user_prompt", alias = "message", alias = "task")]
+    #[serde(
+        default,
+        alias = "prompt",
+        alias = "user_prompt",
+        alias = "message",
+        alias = "task"
+    )]
     pub task_hint: Option<String>,
     #[serde(default)]
     pub source: Option<String>,
@@ -75,10 +81,7 @@ impl HookEvent {
     }
 
     pub fn is_subagent_event(&self) -> bool {
-        matches!(
-            self.event_type.as_str(),
-            "subagent-start" | "subagent-stop"
-        )
+        matches!(self.event_type.as_str(), "subagent-start" | "subagent-stop")
     }
 
     pub fn should_track(&self) -> bool {

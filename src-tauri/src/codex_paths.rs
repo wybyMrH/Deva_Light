@@ -358,7 +358,9 @@ mod tests {
         assert!(is_wsl_unc_path(Path::new(
             r"\\wsl.localhost\Ubuntu\home\you\.codex\sessions"
         )));
-        assert!(is_wsl_unc_path(Path::new("//wsl.localhost/Ubuntu/home/you/.codex/sessions")));
+        assert!(is_wsl_unc_path(Path::new(
+            "//wsl.localhost/Ubuntu/home/you/.codex/sessions"
+        )));
         assert!(!is_wsl_unc_path(Path::new(r"C:\Users\you\.codex\sessions")));
     }
 

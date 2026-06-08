@@ -53,8 +53,8 @@ body {
   min-width: 52px;
   max-width: 72px;
   display: grid;
-  grid-template-rows: minmax(24px, auto) auto;
-  align-content: end;
+  grid-template-rows: auto minmax(24px, auto);
+  align-content: start;
   justify-items: center;
   gap: 4px;
   padding-bottom: 10px;
@@ -96,7 +96,7 @@ body {
 }
 
 .light-housing {
-  grid-row: 2;
+  grid-row: 1;
   position: relative;
   width: 52px;
   min-height: 112px;
@@ -308,8 +308,8 @@ body {
 }
 
 .light-label {
-  grid-row: 1;
-  align-self: end;
+  grid-row: 2;
+  align-self: start;
   width: 56px;
   min-width: 56px;
   max-width: 56px;
