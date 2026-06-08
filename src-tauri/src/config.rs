@@ -25,6 +25,8 @@ pub struct SshRemoteTarget {
     pub identity_file: Option<String>,
     #[serde(default)]
     pub label: Option<String>,
+    #[serde(default)]
+    pub passphrase: Option<String>,
 }
 
 impl SshRemoteTarget {
@@ -48,10 +50,18 @@ impl SshRemoteTarget {
             .filter(|value| !value.is_empty())
             .map(str::to_string);
 
+        let passphrase = self
+            .passphrase
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+
         Some(Self {
             target,
             identity_file,
             label,
+            passphrase,
         })
     }
 }
@@ -62,6 +72,7 @@ impl Default for SshRemoteTarget {
             target: String::new(),
             identity_file: None,
             label: None,
+            passphrase: None,
         }
     }
 }
@@ -85,6 +96,8 @@ pub struct AppConfig {
     pub remote_ssh_targets: Vec<SshRemoteTarget>,
     pub remote_codex_via_ssh: bool,
     pub origin_aliases: HashMap<String, String>,
+    #[serde(default)]
+    pub ssh_discovery_dismissed: Vec<String>,
 }
 
 impl AppConfig {
@@ -124,6 +137,7 @@ impl Default for AppConfig {
             remote_ssh_targets: Vec::new(),
             remote_codex_via_ssh: true,
             origin_aliases: HashMap::new(),
+            ssh_discovery_dismissed: Vec::new(),
         }
     }
 }
@@ -230,6 +244,7 @@ fn migrate_legacy_ssh_target(config: &mut AppConfig, value: &serde_json::Value) 
         target: target.to_string(),
         identity_file,
         label: None,
+        passphrase: None,
     });
 }
 

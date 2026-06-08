@@ -71,6 +71,7 @@ pub struct SshRemoteTargetView {
     pub target: String,
     pub identity_file: Option<String>,
     pub label: Option<String>,
+    pub passphrase: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -174,6 +175,7 @@ pub fn get_app_config() -> AppConfigView {
                 .label
                 .clone()
                 .or_else(|| config.origin_aliases.get(&format!("ssh:{}", entry.target)).cloned()),
+            passphrase: entry.passphrase.clone(),
         })
         .collect();
     let origin_aliases = config
@@ -260,6 +262,7 @@ pub fn save_app_config_command(
                     target: entry.target,
                     identity_file: entry.identity_file,
                     label: entry.label,
+                    passphrase: entry.passphrase,
                 }
                 .normalized()
             })
@@ -469,6 +472,7 @@ pub fn persist_window_position(x: i32, y: i32) -> Result<(), String> {
 pub fn test_ssh_connection(
     ssh_target: Option<String>,
     ssh_identity_file: Option<String>,
+    ssh_passphrase: Option<String>,
 ) -> deva_light::ssh_remote::SshConnectionTest {
     let config = load_app_config();
     let target = ssh_target
@@ -488,8 +492,66 @@ pub fn test_ssh_connection(
                 .first()
                 .and_then(|entry| entry.identity_file.clone())
         });
+    let passphrase = ssh_passphrase
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            config
+                .normalized_ssh_targets()
+                .first()
+                .and_then(|entry| entry.passphrase.clone())
+        });
 
-    deva_light::ssh_remote::test_ssh_connection(&target, identity.as_deref())
+    deva_light::ssh_remote::test_ssh_connection(
+        &target,
+        identity.as_deref(),
+        passphrase.as_deref(),
+    )
+}
+
+#[tauri::command]
+pub fn pick_ssh_private_key() -> Result<Option<String>, String> {
+    deva_light::ssh_remote::pick_ssh_private_key()
+}
+
+#[tauri::command]
+pub fn get_ssh_setup_guide() -> deva_light::ssh_setup::SshSetupGuide {
+    deva_light::ssh_setup::build_ssh_setup_guide()
+}
+
+#[tauri::command]
+pub fn discover_ssh_key_candidates() -> Vec<deva_light::ssh_setup::SshKeyCandidate> {
+    let config = load_app_config();
+    deva_light::ssh_setup::discover_ssh_key_candidates()
+        .into_iter()
+        .filter(|candidate| !config.ssh_discovery_dismissed.contains(&candidate.id))
+        .collect()
+}
+
+#[tauri::command]
+pub fn dismiss_ssh_discovery(candidate_id: String) -> Result<(), String> {
+    let trimmed = candidate_id.trim();
+    if trimmed.is_empty() {
+        return Err("candidate id is empty".to_string());
+    }
+
+    let mut config = load_app_config();
+    if !config
+        .ssh_discovery_dismissed
+        .iter()
+        .any(|id| id == trimmed)
+    {
+        config
+            .ssh_discovery_dismissed
+            .push(trimmed.to_string());
+        save_app_config(&config).map_err(|error| error.to_string())?;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub fn read_ssh_public_key(identity_path: String) -> Result<String, String> {
+    deva_light::ssh_setup::read_ssh_public_key(&identity_path)
 }
 
 #[tauri::command]

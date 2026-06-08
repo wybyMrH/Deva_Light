@@ -1,7 +1,7 @@
 use crate::aggregator::StateAggregator;
 use crate::logging::log_info;
 use crate::monitoring::is_monitoring_paused;
-use crate::types::{Status, Tool};
+use crate::types::Status;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -10,8 +10,6 @@ use std::thread;
 use std::time::{Duration, SystemTime};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
-const RESTORE_IF_ACTIVE_WITHIN: Duration = Duration::from_secs(3 * 60);
-const STALE_WORKING_AFTER: Duration = Duration::from_secs(10 * 60);
 const REMOVE_INACTIVE_AFTER: Duration = Duration::from_secs(15 * 60);
 
 #[derive(Debug, Clone)]
@@ -51,9 +49,16 @@ fn run_cursor_watcher(aggregator: Arc<StateAggregator>) {
                 seen.insert(entry.session_id.clone(), true);
 
                 if aggregator.session_status(&entry.session_id).is_some() {
-                    if let Some(existing) = tracked.get_mut(&entry.session_id) {
-                        existing.last_activity_at = entry.last_activity_at;
-                    }
+                    tracked
+                        .entry(entry.session_id.clone())
+                        .and_modify(|existing| {
+                            existing.last_activity_at = entry.last_activity_at;
+                        })
+                        .or_insert_with(|| TrackedCursorSession {
+                            session_id: entry.session_id.clone(),
+                            cwd: entry.cwd.clone(),
+                            last_activity_at: entry.last_activity_at,
+                        });
                     continue;
                 }
 
@@ -64,30 +69,8 @@ fn run_cursor_watcher(aggregator: Arc<StateAggregator>) {
                     continue;
                 }
 
-                if is_recently_active(entry.last_activity_at, now, RESTORE_IF_ACTIVE_WITHIN) {
-                    log_info(
-                        "cursor_watcher",
-                        format!(
-                            "restored Cursor session {} at {}",
-                            entry.session_id,
-                            entry.cwd.display()
-                        ),
-                    );
-                    aggregator.add_session(
-                        entry.session_id.clone(),
-                        Tool::Cursor,
-                        &entry.cwd,
-                        Status::Working,
-                    );
-                    tracked.insert(
-                        entry.session_id.clone(),
-                        TrackedCursorSession {
-                            session_id: entry.session_id.clone(),
-                            cwd: entry.cwd.clone(),
-                            last_activity_at: entry.last_activity_at,
-                        },
-                    );
-                }
+                // Cursor live state comes from HTTP hooks. File-based restore on
+                // restart produced too many phantom lamps from old transcripts.
             }
 
             let stale_ids: Vec<String> = tracked
@@ -103,11 +86,6 @@ fn run_cursor_watcher(aggregator: Arc<StateAggregator>) {
 
                     if inactive_for >= REMOVE_INACTIVE_AFTER {
                         Some(session_id.clone())
-                    } else if inactive_for >= STALE_WORKING_AFTER
-                        && aggregator.session_status(session_id) == Some(Status::Working)
-                    {
-                        aggregator.update_session_status(session_id, Status::Waiting);
-                        None
                     } else {
                         None
                     }
@@ -202,16 +180,6 @@ fn transcript_jsonl_mtime(session_path: &Path) -> Option<SystemTime> {
         .ok()
 }
 
-fn is_recently_active(
-    last_activity_at: SystemTime,
-    now: SystemTime,
-    window: Duration,
-) -> bool {
-    now.duration_since(last_activity_at)
-        .map(|elapsed| elapsed < window)
-        .unwrap_or(false)
-}
-
 fn cursor_projects_dir() -> PathBuf {
     home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -226,7 +194,7 @@ fn home_dir() -> Option<PathBuf> {
 }
 
 /// Decode Cursor project folder slug to filesystem path.
-/// Examples: `mnt-e-code-Python-AI-Light` → `/mnt/e/code/Python/AI-Light`
+/// Examples: `mnt-e-code-demo` → `/mnt/e/code/demo`
 pub fn decode_cursor_project_slug(slug: &str) -> Option<PathBuf> {
     if slug.starts_with("tmp-") || slug.chars().all(|c| c.is_ascii_digit()) {
         return None;
@@ -316,8 +284,8 @@ mod tests {
     #[test]
     fn decodes_wsl_style_cursor_project_slug() {
         assert_eq!(
-            decode_cursor_project_slug("mnt-e-code-Python-AI-Light"),
-            Some(PathBuf::from("/mnt/e/code/Python/AI_Light"))
+            decode_cursor_project_slug("mnt-e-code-demo"),
+            Some(PathBuf::from("/mnt/e/code/demo"))
         );
         assert_eq!(
             decode_cursor_project_slug("mnt-d-code-Python-searxng-master"),

@@ -286,16 +286,12 @@ fn restore_existing_rollout(
         return Ok(());
     };
 
-    let mut status = watched.last_status.unwrap_or(Status::Idle);
+    let status = watched.last_status.unwrap_or(Status::Idle);
 
-    // Skip only clearly finished sessions whose rollout has not changed recently.
-    // Active/working sessions may go quiet for long stretches and should still
-    // be restored after an app restart.
-    if age >= REMOVE_INACTIVE_AFTER && status != Status::Working {
+    // Only restore rollouts that were actively working right before restart.
+    // Older files produce false yellow lights after Deva Light relaunches.
+    if age >= STALE_WORKING_AFTER || status != Status::Working {
         return Ok(());
-    }
-    if status == Status::Working && age >= STALE_WORKING_AFTER {
-        status = Status::Waiting;
     }
 
     aggregator.add_session_with_context(
@@ -899,10 +895,8 @@ mod tests {
         let first_rollout = root.join("rollout-2026-05-31T00-00-00-s1.jsonl");
         let second_rollout = root.join("rollout-2026-05-31T00-05-00-s2.jsonl");
 
-        for (path, session_id, event_type) in [
-            (&first_rollout, "s1", "task_started"),
-            (&second_rollout, "s2", "task_complete"),
-        ] {
+        for (path, session_id) in [(&first_rollout, "s1"), (&second_rollout, "s2")] {
+            let event_type = "task_started";
             fs::write(
                 path,
                 format!(
@@ -967,7 +961,7 @@ mod tests {
     }
 
     #[test]
-    fn baseline_existing_stale_working_rollout_is_restored() {
+    fn baseline_existing_stale_working_rollout_is_not_restored() {
         let root = std::env::temp_dir().join(unique_name("ai-light-codex-root"));
         let project = std::env::temp_dir().join(unique_name("ai-light-codex-project"));
         fs::create_dir_all(&root).unwrap();
@@ -996,12 +990,9 @@ mod tests {
         let mut files = HashMap::new();
         poll_rollout_root(&aggregator, &mut files, true, &root).unwrap();
 
-        let lights = aggregator.get_lights();
-        assert_eq!(lights.len(), 1);
-        assert_eq!(
-            lights[0].status,
-            Status::Waiting,
-            "long-idle working rollouts restore as waiting, not dropped"
+        assert!(
+            aggregator.get_lights().is_empty(),
+            "stale working rollouts should not reappear as phantom yellow lights"
         );
 
         let _ = fs::remove_dir_all(root);

@@ -140,8 +140,44 @@
             <article class="card">
               <h2>SSH 远程 Codex</h2>
               <p class="card-intro">
-                通过 SSH 读取远程 <code>~/.codex/sessions</code>。后台轮询使用<strong>非交互 SSH</strong>，需密钥认证（不支持密码输入）。
+                通过 SSH 读取远程 <code>~/.codex/sessions</code>。后台需<strong>非交互连接</strong>，请使用公钥（或带口令的私钥 + 下方口令字段）。
               </p>
+
+              <div id="ssh-discovery-banner" class="ssh-discovery-banner" hidden></div>
+
+              <details class="help-details ssh-tutorial" open>
+                <summary>SSH 配置教程（生成密钥 → 上传 → 测试 → 保存）</summary>
+                <ol class="ssh-tutorial-steps">
+                  <li>
+                    <strong>生成本机密钥对</strong>（如已有可跳过）
+                    <pre id="ssh-guide-generate" class="mono-block"></pre>
+                    <button type="button" class="copy-inline" data-copy-target="ssh-guide-generate">复制命令</button>
+                  </li>
+                  <li>
+                    <strong>把公钥安装到远程主机</strong>
+                    <pre id="ssh-guide-copy-id" class="mono-block"></pre>
+                    <p class="field-hint">将 <code>user@host</code> 换成你的 SSH 目标。也可手动把 <code>id_ed25519.pub</code> 内容追加到远程 <code>~/.ssh/authorized_keys</code>。</p>
+                    <button type="button" class="copy-inline" data-copy-target="ssh-guide-copy-id">复制命令</button>
+                  </li>
+                  <li>
+                    <strong>私钥有口令时（二选一）</strong>
+                    <ul>
+                      <li>推荐：启动 <code>ssh-agent</code> 后执行 <code>ssh-add 私钥路径</code>（Windows / WSL 命令见下方）</li>
+                      <li>或在下方主机配置里填写「私钥口令」（保存在本机 <code>~/.deva_light/config.json</code>）</li>
+                    </ul>
+                    <pre id="ssh-guide-agent-windows" class="mono-block"></pre>
+                    <pre id="ssh-guide-agent-wsl" class="mono-block"></pre>
+                  </li>
+                  <li>
+                    <strong>服务器要求「公钥 + 登录密码」双重验证？</strong>
+                    <p class="field-hint">后台无法自动输入登录密码。请为 Deva Light 单独创建一个<strong>仅公钥登录</strong>的监控账号，或联系管理员调整 <code>sshd_config</code> 的 <code>AuthenticationMethods</code>。</p>
+                  </li>
+                  <li>
+                    <strong>在终端测试通过后</strong>，在下方填写 SSH 目标、私钥路径，点「测试」，再点窗口右下角「保存更改」。
+                  </li>
+                </ol>
+              </details>
+
               <label class="row toggle-row">
                 <span>
                   <strong>启用 SSH Codex 监控</strong>
@@ -168,11 +204,11 @@
                 <output id="ssh-codex-path" class="mono">未配置</output>
               </div>
               <details class="help-details">
-                <summary>SSH 认证说明</summary>
+                <summary>为何不能只用 SSH 登录密码？</summary>
                 <ul>
-                  <li>推荐：<code>ssh-copy-id user@host</code> 配置免密公钥</li>
-                  <li>或使用 ssh-agent 加载私钥；多密钥时在上方指定私钥路径</li>
-                  <li>密码登录无法在后台自动完成，终端手动 ssh 一次仅用于信任主机</li>
+                  <li>Deva Light 需要<strong>持续后台轮询</strong>远程 Codex 会话，无法弹出密码输入框</li>
+                  <li>因此必须使用公钥；私钥口令可保存在本机或由 ssh-agent 管理</li>
+                  <li>终端里用密码 ssh 一次，仅用于信任主机指纹，不能让后台自动用登录密码连接</li>
                 </ul>
               </details>
             </article>

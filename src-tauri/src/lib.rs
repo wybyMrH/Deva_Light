@@ -13,5 +13,6 @@ pub mod monitor_origin;
 pub mod project;
 pub mod remote;
 pub mod ssh_remote;
+pub mod ssh_setup;
 pub mod types;
 pub mod updater;

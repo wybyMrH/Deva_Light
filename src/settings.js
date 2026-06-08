@@ -30,6 +30,7 @@ const openAppLogButton = document.getElementById("open-app-log");
 const alwaysOnTopCheckbox = document.getElementById("always-on-top");
 const sshTargetsListEl = document.getElementById("ssh-targets-list");
 const addSshTargetButton = document.getElementById("add-ssh-target");
+const sshDiscoveryBannerEl = document.getElementById("ssh-discovery-banner");
 const originAliasesInput = document.getElementById("origin-aliases");
 const remoteCodexViaSshCheckbox = document.getElementById("remote-codex-via-ssh");
 const sshCodexPathEl = document.getElementById("ssh-codex-path");
@@ -116,6 +117,19 @@ tauriEvent?.listen("update-download-progress", (event) => {
   renderUpdateProgress(event.payload);
 });
 
+document.querySelectorAll(".copy-inline").forEach((button) => {
+  button.addEventListener("click", async () => {
+    const target = document.getElementById(button.dataset.copyTarget || "");
+    if (!target?.textContent?.trim()) return;
+    try {
+      await navigator.clipboard.writeText(target.textContent.trim());
+      setStatus("命令已复制。");
+    } catch (error) {
+      setStatus(String(error), true);
+    }
+  });
+});
+
 loadSettings();
 
 function switchPanel(panelId) {
@@ -142,6 +156,11 @@ function switchPanel(panelId) {
 
   if (panelId === "advanced") {
     void refreshDiagnostics();
+  }
+
+  if (panelId === "remote") {
+    void loadSshSetupGuide();
+    void refreshSshDiscovery();
   }
 }
 
@@ -457,7 +476,9 @@ function parseOriginAliases() {
     .filter(Boolean);
 }
 
-function addSshTargetRow(entry = { target: "", identityFile: null, label: null }) {
+function addSshTargetRow(
+  entry = { target: "", identityFile: null, label: null, passphrase: null },
+) {
   const row = document.createElement("div");
   row.className = "ssh-target-row";
 
@@ -466,25 +487,47 @@ function addSshTargetRow(entry = { target: "", identityFile: null, label: null }
   targetField.innerHTML = "<span>SSH 目标</span>";
   const targetInput = document.createElement("input");
   targetInput.type = "text";
+  targetInput.dataset.field = "target";
   targetInput.placeholder = "user@192.168.1.10";
   targetInput.value = entry.target || "";
   targetField.appendChild(targetInput);
 
   const identityField = document.createElement("label");
   identityField.className = "field";
-  identityField.innerHTML = "<span>私钥路径（可选）</span>";
+  identityField.innerHTML = "<span>私钥路径</span>";
+  const identityRow = document.createElement("div");
+  identityRow.className = "identity-path-row";
   const identityInput = document.createElement("input");
   identityInput.type = "text";
+  identityInput.dataset.field = "identity";
   identityInput.placeholder = "~/.ssh/id_ed25519";
   identityInput.value = entry.identityFile || "";
-  identityField.appendChild(identityInput);
+  const browseButton = document.createElement("button");
+  browseButton.type = "button";
+  browseButton.textContent = "浏览…";
+  browseButton.addEventListener("click", () => pickSshPrivateKeyForRow(identityInput));
+  identityRow.append(identityInput, browseButton);
+  identityField.appendChild(identityRow);
+
+  const passphraseField = document.createElement("label");
+  passphraseField.className = "field";
+  passphraseField.innerHTML =
+    "<span>私钥口令（可选）</span><small>用于解锁私钥文件，不是 SSH 登录密码</small>";
+  const passphraseInput = document.createElement("input");
+  passphraseInput.type = "password";
+  passphraseInput.dataset.field = "passphrase";
+  passphraseInput.placeholder = "私钥未设口令可留空";
+  passphraseInput.value = entry.passphrase || "";
+  passphraseInput.autocomplete = "off";
+  passphraseField.appendChild(passphraseInput);
 
   const labelField = document.createElement("label");
   labelField.className = "field";
   labelField.innerHTML = "<span>显示别名（可选）</span>";
   const labelInput = document.createElement("input");
   labelInput.type = "text";
-  labelInput.placeholder = "公司机";
+  labelInput.dataset.field = "label";
+  labelInput.placeholder = "实验室服务器";
   labelInput.value = entry.label || "";
   labelField.appendChild(labelInput);
 
@@ -495,7 +538,14 @@ function addSshTargetRow(entry = { target: "", identityFile: null, label: null }
   testButton.type = "button";
   testButton.textContent = "测试";
   testButton.addEventListener("click", () =>
-    testSshConnection(targetInput.value.trim(), identityInput.value.trim(), testButton),
+    testSshConnection(row, testButton),
+  );
+
+  const copyPubkeyButton = document.createElement("button");
+  copyPubkeyButton.type = "button";
+  copyPubkeyButton.textContent = "复制公钥";
+  copyPubkeyButton.addEventListener("click", () =>
+    copySshPublicKey(identityInput.value.trim()),
   );
 
   const removeButton = document.createElement("button");
@@ -506,6 +556,7 @@ function addSshTargetRow(entry = { target: "", identityFile: null, label: null }
     if (sshTargetsListEl.children.length <= 1) {
       targetInput.value = "";
       identityInput.value = "";
+      passphraseInput.value = "";
       labelInput.value = "";
       return;
     }
@@ -516,29 +567,189 @@ function addSshTargetRow(entry = { target: "", identityFile: null, label: null }
   status.className = "status-badge ssh-row-status";
   status.setAttribute("aria-live", "polite");
 
-  actions.append(testButton, removeButton, status);
-  row.append(targetField, identityField, labelField, actions);
+  actions.append(testButton, copyPubkeyButton, removeButton, status);
+  row.append(targetField, identityField, passphraseField, labelField, actions);
   sshTargetsListEl.appendChild(row);
+  return row;
 }
 
 function collectSshTargets() {
   return [...sshTargetsListEl.querySelectorAll(".ssh-target-row")]
     .map((row) => {
-      const inputs = row.querySelectorAll("input");
-      const target = inputs[0]?.value.trim();
-      const identityFile = inputs[1]?.value.trim();
-      const label = inputs[2]?.value.trim();
+      const target = row.querySelector('[data-field="target"]')?.value.trim();
+      const identityFile = row.querySelector('[data-field="identity"]')?.value.trim();
+      const passphrase = row.querySelector('[data-field="passphrase"]')?.value.trim();
+      const label = row.querySelector('[data-field="label"]')?.value.trim();
       if (!target) return null;
       return {
         target,
         identityFile: identityFile || null,
+        passphrase: passphrase || null,
         label: label || null,
       };
     })
     .filter(Boolean);
 }
 
-async function testSshConnection(sshTarget, sshIdentityFile, button) {
+async function pickSshPrivateKeyForRow(input) {
+  try {
+    const picked = await invoke("pick_ssh_private_key");
+    if (picked) {
+      input.value = picked;
+      setStatus("已选择私钥文件。");
+    }
+  } catch (error) {
+    setStatus(String(error), true);
+  }
+}
+
+async function copySshPublicKey(identityPath) {
+  if (!identityPath) {
+    setStatus("请先填写或选择私钥路径。", true);
+    return;
+  }
+
+  try {
+    const content = await invoke("read_ssh_public_key", { identityPath });
+    await navigator.clipboard.writeText(content);
+    setStatus("公钥已复制，可粘贴到远程 authorized_keys。");
+  } catch (error) {
+    setStatus(String(error), true);
+  }
+}
+
+async function loadSshSetupGuide() {
+  try {
+    const guide = await invoke("get_ssh_setup_guide");
+    const generateEl = document.getElementById("ssh-guide-generate");
+    const copyIdEl = document.getElementById("ssh-guide-copy-id");
+    const agentWinEl = document.getElementById("ssh-guide-agent-windows");
+    const agentWslEl = document.getElementById("ssh-guide-agent-wsl");
+    if (generateEl) generateEl.textContent = guide.generateKeyCommand;
+    if (copyIdEl) copyIdEl.textContent = guide.copyKeyCommandTemplate;
+    if (agentWinEl) {
+      agentWinEl.textContent = `# Windows PowerShell\n${(guide.windowsAgentCommands || []).join("\n")}`;
+    }
+    if (agentWslEl) {
+      agentWslEl.textContent = `# WSL / Linux\n${(guide.wslAgentCommands || []).join("\n")}`;
+    }
+  } catch (error) {
+    console.debug("loadSshSetupGuide", error);
+  }
+}
+
+async function refreshSshDiscovery() {
+  if (!sshDiscoveryBannerEl) return;
+
+  try {
+    const candidates = await invoke("discover_ssh_key_candidates");
+    renderSshDiscoveryBanner(candidates);
+  } catch (error) {
+    console.debug("refreshSshDiscovery", error);
+    sshDiscoveryBannerEl.hidden = true;
+  }
+}
+
+function renderSshDiscoveryBanner(candidates) {
+  if (!sshDiscoveryBannerEl) return;
+  sshDiscoveryBannerEl.replaceChildren();
+
+  if (!Array.isArray(candidates) || candidates.length === 0) {
+    sshDiscoveryBannerEl.hidden = true;
+    return;
+  }
+
+  sshDiscoveryBannerEl.hidden = false;
+  const title = document.createElement("p");
+  title.className = "ssh-discovery-title";
+  title.textContent = "检测到本机或 WSL 已配置的 SSH 私钥，是否导入到 Deva Light？";
+
+  const list = document.createElement("div");
+  list.className = "ssh-discovery-list";
+
+  for (const candidate of candidates) {
+    const item = document.createElement("div");
+    item.className = "ssh-discovery-item";
+
+    const meta = document.createElement("div");
+    meta.className = "ssh-discovery-meta";
+    meta.innerHTML = `<strong>${candidate.sourceLabel}</strong><span class="mono">${candidate.displayPath}</span>`;
+
+    const hostHint =
+      candidate.hosts?.length > 0
+        ? ` · 已配置主机：${candidate.hosts.map((host) => host.hostAlias).join(", ")}`
+        : "";
+    const hint = document.createElement("p");
+    hint.className = "field-hint";
+    hint.textContent = `完整路径：${candidate.identityPath}${hostHint}`;
+
+    const actions = document.createElement("div");
+    actions.className = "ssh-discovery-actions";
+    const useButton = document.createElement("button");
+    useButton.type = "button";
+    useButton.textContent = "导入配置";
+    useButton.addEventListener("click", () => applySshDiscoveryCandidate(candidate));
+
+    const dismissButton = document.createElement("button");
+    dismissButton.type = "button";
+    dismissButton.className = "ghost";
+    dismissButton.textContent = "不再提示";
+    dismissButton.addEventListener("click", () =>
+      dismissSshDiscoveryCandidate(candidate.id),
+    );
+
+    actions.append(useButton, dismissButton);
+    item.append(meta, hint, actions);
+    list.appendChild(item);
+  }
+
+  sshDiscoveryBannerEl.append(title, list);
+}
+
+function applySshDiscoveryCandidate(candidate) {
+  const hosts = candidate.hosts || [];
+  if (hosts.length === 0) {
+    const emptyRow = sshTargetsListEl.querySelector(".ssh-target-row");
+    const targetInput = emptyRow?.querySelector('[data-field="target"]');
+    const identityInput = emptyRow?.querySelector('[data-field="identity"]');
+    if (targetInput && !targetInput.value.trim()) {
+      identityInput.value = candidate.identityPath;
+      setStatus(`已填入私钥路径（${candidate.sourceLabel}），请补充 SSH 目标后测试。`);
+      void dismissSshDiscoveryCandidate(candidate.id);
+      return;
+    }
+    addSshTargetRow({ identityFile: candidate.identityPath });
+    setStatus(`已添加 ${candidate.sourceLabel} 私钥，请填写 SSH 目标。`);
+    void dismissSshDiscoveryCandidate(candidate.id);
+    return;
+  }
+
+  for (const host of hosts) {
+    addSshTargetRow({
+      target: host.target,
+      identityFile: host.identityFile || candidate.identityPath,
+      label: host.hostAlias,
+    });
+  }
+  setStatus(`已导入 ${hosts.length} 个 SSH 主机（${candidate.sourceLabel}）。`);
+  void dismissSshDiscoveryCandidate(candidate.id);
+  sshDiscoveryBannerEl.hidden = true;
+}
+
+async function dismissSshDiscoveryCandidate(candidateId) {
+  try {
+    await invoke("dismiss_ssh_discovery", { candidateId });
+    await refreshSshDiscovery();
+  } catch (error) {
+    console.debug("dismissSshDiscoveryCandidate", error);
+  }
+}
+
+async function testSshConnection(row, button) {
+  const sshTarget = row.querySelector('[data-field="target"]')?.value.trim();
+  const sshIdentityFile = row.querySelector('[data-field="identity"]')?.value.trim();
+  const sshPassphrase = row.querySelector('[data-field="passphrase"]')?.value.trim();
+
   if (!sshTarget) {
     setStatus("请先填写 SSH 目标。", true);
     return;
@@ -553,6 +764,7 @@ async function testSshConnection(sshTarget, sshIdentityFile, button) {
     const result = await invoke("test_ssh_connection", {
       sshTarget,
       sshIdentityFile: sshIdentityFile || null,
+      sshPassphrase: sshPassphrase || null,
     });
 
     statusEl.textContent = result?.message || "测试完成";
