@@ -46,10 +46,10 @@ sudo apt-get install -y \
 
 ```bash
 # Node.js dependencies
-npm install
+npm ci
 
 # Rust dependencies (自动通过 Cargo 安装)
-cargo fetch
+cargo fetch --locked
 ```
 
 ### Run in Development Mode
