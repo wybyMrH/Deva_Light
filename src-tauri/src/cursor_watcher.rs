@@ -288,10 +288,29 @@ mod tests {
             decode_cursor_project_slug("mnt-e-code-demo"),
             Some(PathBuf::from("/mnt/e/code/demo"))
         );
+    }
+
+    #[test]
+    fn resolves_hyphenated_cursor_project_slug_from_existing_path() {
+        let base = std::env::temp_dir().join(format!(
+            "deva-light-cursor-slug-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let target = base.join("code").join("Python").join("searxng-master");
+        std::fs::create_dir_all(&target).unwrap();
+
         assert_eq!(
-            decode_cursor_project_slug("mnt-d-code-Python-searxng-master"),
-            Some(PathBuf::from("/mnt/d/code/Python/searxng-master"))
+            resolve_path_from_segments(
+                &["code", "Python", "searxng", "master"],
+                &base.to_string_lossy()
+            ),
+            Some(target.clone())
         );
+
+        let _ = std::fs::remove_dir_all(base);
     }
 
     #[test]
