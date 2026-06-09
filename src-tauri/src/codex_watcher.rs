@@ -883,6 +883,66 @@ fn process_new_lines_ssh(
     Ok(())
 }
 
+pub(crate) fn live_codex_session_ids() -> HashSet<String> {
+    let auto_roots = auto_codex_sessions_dirs();
+    let roots = codex_session_root_summary_for_auto(&auto_roots, &load_app_config());
+    let tracked_paths = HashSet::new();
+    let mut session_ids = HashSet::new();
+
+    for root in roots
+        .active
+        .iter()
+        .chain(roots.missing.iter())
+    {
+        let Ok(rollouts) = find_rollout_files(root, &tracked_paths, false) else {
+            continue;
+        };
+
+        for path in rollouts {
+            if let Some(session_id) = read_rollout_session_id(&path) {
+                session_ids.insert(session_id);
+            }
+        }
+    }
+
+    session_ids
+}
+
+fn read_rollout_session_id(path: &Path) -> Option<String> {
+    if is_ssh_virtual_path(path) {
+        let (content, _) = read_rollout_from_offset(path, 0).ok()?;
+        return session_id_from_rollout_content(&content);
+    }
+
+    let file = File::open(path).ok()?;
+    let mut reader = BufReader::new(file);
+    let mut line = String::new();
+
+    for _ in 0..32 {
+        line.clear();
+        let bytes = reader.read_line(&mut line).ok()?;
+        if bytes == 0 {
+            break;
+        }
+
+        if let Ok(CodexLineEvent::SessionMeta(meta)) = parse_codex_line(line.trim_end()) {
+            return Some(meta.session_id);
+        }
+    }
+
+    None
+}
+
+fn session_id_from_rollout_content(content: &str) -> Option<String> {
+    for line in content.lines().take(32) {
+        if let Ok(CodexLineEvent::SessionMeta(meta)) = parse_codex_line(line) {
+            return Some(meta.session_id);
+        }
+    }
+
+    None
+}
+
 fn find_rollout_files(
     root: &Path,
     tracked_paths: &HashSet<PathBuf>,

@@ -24,6 +24,13 @@ pub struct StateAggregator {
     on_change: SharedChangeCallback,
 }
 
+#[derive(Debug, Clone)]
+pub struct TrackedSession {
+    pub session_id: String,
+    pub tool: Tool,
+    pub status: Status,
+}
+
 impl StateAggregator {
     pub fn new() -> Self {
         Self::default()
@@ -147,6 +154,22 @@ impl StateAggregator {
             .iter()
             .find(|session| session.session_id == session_id)
             .map(|session| session.status)
+    }
+
+    pub fn tracked_sessions(&self) -> Vec<TrackedSession> {
+        let state = self.state.read().expect("aggregator state lock poisoned");
+
+        state
+            .lights
+            .values()
+            .flat_map(|light| {
+                light.sessions.iter().map(|session| TrackedSession {
+                    session_id: session.session_id.clone(),
+                    tool: session.tool,
+                    status: session.status,
+                })
+            })
+            .collect()
     }
 
     pub fn remove_session(&self, session_id: &str) {

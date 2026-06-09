@@ -51,6 +51,7 @@ fn main() {
             ipc::confirm_session,
             ipc::remove_light,
             ipc::get_lights,
+            ipc::refresh_lights,
             ipc::get_diagnostics,
             ipc::open_project,
             ipc::open_session_logs,

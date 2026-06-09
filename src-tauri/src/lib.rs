@@ -16,6 +16,7 @@ pub mod pending_action;
 pub mod project;
 pub mod providers;
 pub mod remote;
+pub mod session_refresh;
 pub mod ssh_remote;
 pub mod ssh_setup;
 pub mod types;

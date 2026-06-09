@@ -324,6 +324,7 @@ function createAppHandle() {
   root.addEventListener("contextmenu", (event) => {
     event.preventDefault();
     showMenu(event.clientX, event.clientY, [
+      ["刷新状态", () => reconcileLights()],
       ["设置", () => safeInvoke("open_settings", { panel: null })],
       ["检查更新", () => safeInvoke("open_settings", { panel: "about" })],
       ["诊断", () => showDiagnostics()],
@@ -457,6 +458,7 @@ function createProjectLight(lightState) {
     showMenu(event.clientX, event.clientY, [
       ["打开", () => safeInvoke("open_project", { projectId })],
       ["复制路径", () => copyProjectPath(projectId)],
+      ["刷新状态", () => reconcileLights()],
       ["设置", () => safeInvoke("open_settings")],
       ["移除", () => safeInvoke("remove_light", { projectId })],
     ]);
@@ -873,6 +875,11 @@ async function refreshLights() {
     lights = nextLights;
     render();
   }
+}
+
+async function reconcileLights() {
+  await safeInvoke("refresh_lights");
+  await refreshLights();
 }
 
 async function copyProjectPath(projectId) {

@@ -2,7 +2,7 @@ use crate::aggregator::StateAggregator;
 use crate::logging::log_info;
 use crate::monitoring::is_monitoring_paused;
 use crate::types::Status;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -114,6 +114,28 @@ fn run_cursor_watcher(aggregator: Arc<StateAggregator>) {
 struct CursorSessionEntry {
     session_id: String,
     last_activity_at: SystemTime,
+}
+
+pub(crate) fn recent_cursor_session_ids() -> HashSet<String> {
+    let projects_dir = cursor_projects_dir();
+    let Ok(entries) = scan_cursor_sessions(&projects_dir) else {
+        return HashSet::new();
+    };
+
+    let now = SystemTime::now();
+    entries
+        .into_iter()
+        .filter_map(|entry| {
+            let inactive_for = now
+                .duration_since(entry.last_activity_at)
+                .unwrap_or(REMOVE_INACTIVE_AFTER);
+            if inactive_for < REMOVE_INACTIVE_AFTER {
+                Some(entry.session_id)
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 fn scan_cursor_sessions(projects_dir: &Path) -> Result<Vec<CursorSessionEntry>, std::io::Error> {

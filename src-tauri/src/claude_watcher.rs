@@ -3,7 +3,7 @@ use crate::logging::log_info;
 use crate::monitoring::is_monitoring_paused;
 use crate::types::{Status, Tool};
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -176,6 +176,30 @@ fn home_dir() -> Option<PathBuf> {
     std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
         .map(PathBuf::from)
+}
+
+pub(crate) fn live_claude_session_ids() -> HashSet<String> {
+    let sessions_dir = claude_sessions_dir();
+    let Ok(entries) = scan_session_files(&sessions_dir) else {
+        return HashSet::new();
+    };
+
+    entries
+        .into_iter()
+        .map(|(_file_name, session)| session.session_id)
+        .collect()
+}
+
+pub(crate) fn claude_session_process_alive(session_id: &str) -> Option<bool> {
+    let sessions_dir = claude_sessions_dir();
+    let Ok(entries) = scan_session_files(&sessions_dir) else {
+        return None;
+    };
+
+    entries
+        .into_iter()
+        .find(|(_file_name, session)| session.session_id == session_id)
+        .map(|(_file_name, session)| is_process_alive(session.pid))
 }
 
 fn scan_session_files(dir: &Path) -> Result<Vec<(String, ClaudeSessionFile)>, std::io::Error> {

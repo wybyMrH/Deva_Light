@@ -131,6 +131,11 @@ pub fn get_lights(aggregator: State<Arc<StateAggregator>>) -> Vec<LightState> {
 }
 
 #[tauri::command]
+pub fn refresh_lights(aggregator: State<Arc<StateAggregator>>) -> deva_light::session_refresh::RefreshLightsResult {
+    deva_light::session_refresh::refresh_tracked_sessions(&aggregator)
+}
+
+#[tauri::command]
 pub fn open_project(
     project_id: String,
     aggregator: State<Arc<StateAggregator>>,
