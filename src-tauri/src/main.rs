@@ -20,7 +20,71 @@ use tauri_plugin_notification::NotificationExt;
 
 mod ipc;
 
+/// On Windows, copy the system proxy (IE/WinHTTP Internet Settings) into the
+/// HTTPS_PROXY/HTTP_PROXY environment variables so reqwest-based clients (news
+/// panel) and the updater actually use it. Without this, network requests only
+/// go through the proxy when the user enables TUN mode (network-layer hijack).
+#[cfg(windows)]
+fn apply_system_proxy_to_env() {
+    if std::env::var_os("HTTPS_PROXY").is_some()
+        || std::env::var_os("HTTP_PROXY").is_some()
+        || std::env::var_os("ALL_PROXY").is_some()
+    {
+        return;
+    }
+    use winreg::enums::*;
+    use winreg::RegKey;
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let Ok(settings) = hkcu.open_subkey(
+        "Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
+    ) else {
+        return;
+    };
+    let enabled: u32 = settings.get_value("ProxyEnable").unwrap_or(0);
+    if enabled == 0 {
+        return;
+    }
+    let proxy: String = settings.get_value("ProxyServer").unwrap_or_default();
+    let proxy = proxy.trim();
+    if proxy.is_empty() {
+        return;
+    }
+    // ProxyServer may be "host:port" or "http=...;https=...;socks=..."
+    let picked = proxy
+        .split(';')
+        .map(str::trim)
+        .find_map(|part| {
+            if let Some((key, value)) = part.split_once('=') {
+                if key.eq_ignore_ascii_case("https") || key.eq_ignore_ascii_case("http") {
+                    return Some(value.trim().to_string());
+                }
+                None
+            } else {
+                Some(part.to_string())
+            }
+        })
+        .unwrap_or_else(|| proxy.to_string());
+    if picked.is_empty() {
+        return;
+    }
+    let url = if picked.starts_with("http://")
+        || picked.starts_with("https://")
+        || picked.starts_with("socks")
+    {
+        picked
+    } else {
+        format!("http://{picked}")
+    };
+    std::env::set_var("HTTPS_PROXY", &url);
+    std::env::set_var("HTTP_PROXY", &url);
+    log_info("app", "applied Windows system proxy for network requests");
+}
+
+#[cfg(not(windows))]
+fn apply_system_proxy_to_env() {}
+
 fn main() {
+    apply_system_proxy_to_env();
     log_info("app", "starting Deva Light");
 
     let app_lock = match AppLock::acquire() {
@@ -266,7 +330,7 @@ fn main() {
                 });
             }
             log_info("app", "startup complete");
-            deva_light::updater::spawn_auto_update_service(app.handle(), Arc::clone(&aggregator));
+            deva_light::updater::spawn_auto_update_service(app.handle());
             Ok(())
         })
         .run(tauri::generate_context!())

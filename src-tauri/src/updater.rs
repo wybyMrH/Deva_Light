@@ -1,4 +1,3 @@
-use crate::aggregator::StateAggregator;
 use crate::config::load_app_config;
 use crate::logging::{log_info, log_warn};
 use serde::Serialize;
@@ -149,13 +148,8 @@ async fn install_update(
     app.restart();
 }
 
-async fn try_silent_update(app: &AppHandle, aggregator: &StateAggregator) -> Result<bool, String> {
+async fn try_silent_update(app: &AppHandle) -> Result<bool, String> {
     if !load_app_config().auto_update_enabled {
-        return Ok(false);
-    }
-
-    if aggregator.has_active_lights() {
-        log_info("updater", "silent update deferred: active lights present");
         return Ok(false);
     }
 
@@ -188,7 +182,7 @@ async fn try_silent_update(app: &AppHandle, aggregator: &StateAggregator) -> Res
     Ok(true)
 }
 
-pub fn spawn_auto_update_service(app: &AppHandle, aggregator: Arc<StateAggregator>) {
+pub fn spawn_auto_update_service(app: &AppHandle) {
     if cfg!(debug_assertions) {
         return;
     }
@@ -201,7 +195,7 @@ pub fn spawn_auto_update_service(app: &AppHandle, aggregator: Arc<StateAggregato
             let auto_update_enabled = load_app_config().auto_update_enabled;
 
             if auto_update_enabled {
-                match try_silent_update(&handle, &aggregator).await {
+                match try_silent_update(&handle).await {
                     Ok(true) => return,
                     Ok(false) => {}
                     Err(error) => {

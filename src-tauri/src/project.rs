@@ -1,21 +1,43 @@
+use parking_lot::Mutex;
 use serde_json::Value as JsonValue;
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use toml::Value as TomlValue;
 
+/// Cache of cwd → (project_id, project_label). `identify_project` runs `git`
+/// twice per call, which is very slow on WSL↔Windows cross-FS paths; caching
+/// avoids re-running it for every new session in the same directory.
+static PROJECT_CACHE: Mutex<Option<HashMap<String, (String, String)>>> = Mutex::new(None);
+
 /// Identify the project represented by a working directory.
 ///
 /// Returns `(project_id, project_label)`. `project_id` prefers a stable git
 /// remote identity, otherwise a normalized path key that merges WSL/Windows
-/// views of the same directory.
+/// views of the same directory. Results are cached per cwd.
 pub fn identify_project(cwd: &Path) -> (String, String) {
+    let key = cwd.to_string_lossy().to_string();
+    if let Some(cached) = PROJECT_CACHE
+        .lock()
+        .as_ref()
+        .and_then(|map| map.get(&key))
+        .cloned()
+    {
+        return cached;
+    }
+
     let project_path = find_git_root(cwd).unwrap_or_else(|| normalize_path(cwd));
     let project_label = project_label(&project_path);
     let project_id = git_remote_identity(&project_path)
         .unwrap_or_else(|| normalize_path_key(&display_path(&project_path)));
 
-    (project_id, project_label)
+    let result = (project_id, project_label);
+    PROJECT_CACHE
+        .lock()
+        .get_or_insert_with(HashMap::new)
+        .insert(key, result.clone());
+    result
 }
 
 pub fn normalize_path_key(path: &str) -> String {
