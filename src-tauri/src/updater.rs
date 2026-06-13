@@ -1,3 +1,5 @@
+use crate::aggregator::StateAggregator;
+use crate::config::load_app_config;
 use crate::logging::{log_info, log_warn};
 use serde::Serialize;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -91,6 +93,13 @@ pub async fn download_and_install(app: &AppHandle) -> Result<(), String> {
         return Err("当前已是最新版本".to_string());
     };
 
+    install_update(app, update).await
+}
+
+async fn install_update(
+    app: &AppHandle,
+    update: tauri_plugin_updater::Update,
+) -> Result<(), String> {
     log_info(
         "updater",
         format!(
@@ -141,32 +150,68 @@ pub async fn download_and_install(app: &AppHandle) -> Result<(), String> {
     app.restart();
 }
 
-pub fn spawn_startup_update_check(app: &AppHandle) {
+async fn try_silent_update(app: &AppHandle, aggregator: &StateAggregator) -> Result<bool, String> {
+    if !load_app_config().auto_update_enabled {
+        return Ok(false);
+    }
+
+    if aggregator.has_active_lights() {
+        log_info("updater", "silent update deferred: active lights present");
+        return Ok(false);
+    }
+
+    let updater = build_updater(app)?;
+    let Some(update) = updater
+        .check()
+        .await
+        .map_err(|error| map_update_error(&error.to_string()))?
+    else {
+        return Ok(false);
+    };
+
+    log_info(
+        "updater",
+        format!(
+            "silent update installing {} (current {})",
+            update.version,
+            app.package_info().version
+        ),
+    );
+
+    update
+        .download_and_install(|_chunk_length, _content_length| {}, || {})
+        .await
+        .map_err(|error| map_update_error(&error.to_string()))?;
+
+    log_info("updater", "silent update finished, restarting app");
+    app.restart();
+    #[allow(unreachable_code)]
+    Ok(true)
+}
+
+pub fn spawn_auto_update_service(app: &AppHandle, aggregator: Arc<StateAggregator>) {
     if cfg!(debug_assertions) {
         return;
     }
 
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_secs(6)).await;
+        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
 
-        match check_for_update(&handle).await {
-            Ok(Some(info)) => {
-                let _ = handle.emit("update-available", &info);
-                let _ = handle
-                    .notification()
-                    .builder()
-                    .title("Deva Light 有更新")
-                    .body(format!(
-                        "新版本 {} 可用，打开设置 → 关于 可一键更新",
-                        info.version
-                    ))
-                    .show();
+        loop {
+            let auto_update_enabled = load_app_config().auto_update_enabled;
+
+            if auto_update_enabled {
+                match try_silent_update(&handle, &aggregator).await {
+                    Ok(true) => return,
+                    Ok(false) => {}
+                    Err(error) => {
+                        log_warn("updater", format!("silent update failed: {error}"));
+                    }
+                }
             }
-            Ok(None) => {}
-            Err(error) => {
-                log_warn("updater", format!("startup update check failed: {error}"));
-            }
+
+            tokio::time::sleep(std::time::Duration::from_secs(30 * 60)).await;
         }
     });
 }

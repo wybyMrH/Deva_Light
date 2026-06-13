@@ -24,6 +24,7 @@ let compactFocusProjectId = null;
 const lightElements = new Map();
 let lastWindowSize = { width: 0, height: 0 };
 let resizeFrame = 0;
+const uiConfigReady = loadUiConfig();
 const WINDOW_GUTTER_X = 36;
 const WINDOW_GUTTER_Y = 0;
 const MENU_EDGE_GUTTER = 12;
@@ -40,8 +41,10 @@ container.appendChild(appHandle);
 drawer.appendChild(createDrawer());
 
 tauriEvent?.listen("state-changed", (event) => {
-  lights = Array.isArray(event.payload) ? event.payload : [];
-  render();
+  void uiConfigReady.then(() => {
+    lights = Array.isArray(event.payload) ? event.payload : [];
+    render();
+  });
 });
 
 tauriEvent?.listen("config-changed", (event) => {
@@ -51,7 +54,7 @@ tauriEvent?.listen("config-changed", (event) => {
     compactFocusProjectId = null;
     hideDrawer();
   }
-  render();
+  void uiConfigReady.then(() => render());
 });
 
 window.addEventListener("drawer-project-selected", (event) => {
@@ -900,7 +903,7 @@ async function loadUiConfig() {
   }
 }
 
-loadUiConfig().then(() => {
+uiConfigReady.then(() => {
   refreshLights();
   scheduleWindowResize();
 });

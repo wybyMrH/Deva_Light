@@ -83,6 +83,12 @@ pub struct AppConfig {
     pub origin_aliases: HashMap<String, String>,
     #[serde(default)]
     pub ssh_discovery_dismissed: Vec<String>,
+    #[serde(default = "default_auto_update_enabled")]
+    pub auto_update_enabled: bool,
+}
+
+fn default_auto_update_enabled() -> bool {
+    true
 }
 
 impl AppConfig {
@@ -124,6 +130,7 @@ impl Default for AppConfig {
             remote_codex_via_ssh: true,
             origin_aliases: HashMap::new(),
             ssh_discovery_dismissed: Vec::new(),
+            auto_update_enabled: true,
         }
     }
 }

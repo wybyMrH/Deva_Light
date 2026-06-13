@@ -273,8 +273,15 @@
                 <strong id="app-version" class="version-value">—</strong>
               </div>
               <p class="card-intro">
-                发布新版本后，应用会自动检测更新并通知你。也可手动检查并一键安装，无需重新下载安装包。
+                新版本会在空闲时静默下载并自动安装重启，无需重新下载安装包。可在下方关闭自动更新，或随时手动检查。
               </p>
+              <label class="row toggle-row">
+                <span>
+                  <strong>自动更新</strong>
+                  <small>空闲时静默下载新版本并自动安装重启；有 AI 任务进行时自动推迟。</small>
+                </span>
+                <input id="auto-update-enabled" type="checkbox" class="switch" checked />
+              </label>
               <div class="action-row">
                 <button id="check-update" type="button">检查更新</button>
               </div>

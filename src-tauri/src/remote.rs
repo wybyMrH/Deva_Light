@@ -1,8 +1,23 @@
 use crate::config::{ensure_http_token, load_app_config, save_app_config, AppConfig};
 use crate::ssh_remote::discover_codex_sessions_dir;
 use std::net::{IpAddr, Ipv4Addr, UdpSocket};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 #[cfg(windows)]
 use std::process::Command;
+
+struct AddressCache {
+    addresses: Vec<String>,
+    fetched_at: Instant,
+}
+
+static ADDRESS_CACHE: OnceLock<Mutex<Option<AddressCache>>> = OnceLock::new();
+
+fn address_cache() -> &'static Mutex<Option<AddressCache>> {
+    ADDRESS_CACHE.get_or_init(|| Mutex::new(None))
+}
+
+const ADDRESS_CACHE_TTL: Duration = Duration::from_secs(120);
 
 #[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -29,7 +44,7 @@ pub struct SshTargetSetupInfo {
     pub ssh_codex_path: Option<String>,
 }
 
-pub fn build_remote_setup_info() -> Result<RemoteSetupInfo, String> {
+pub fn build_remote_setup_info(probe_ssh: bool) -> Result<RemoteSetupInfo, String> {
     let mut config = load_app_config();
     let token = ensure_http_token(&mut config);
     if token.is_some() && config.http_token.is_some() {
@@ -38,7 +53,13 @@ pub fn build_remote_setup_info() -> Result<RemoteSetupInfo, String> {
 
     let runtime_port = crate::config::load_runtime_config().map(|runtime| runtime.http_port);
     let port = config.http_port.or(runtime_port).unwrap_or(17_321);
-    let addresses = detect_local_addresses();
+    // Only enumerate LAN adapters when LAN forwarding is enabled; localhost mode
+    // never needs it and avoids spawning PowerShell entirely.
+    let addresses = if config.http_bind == "0.0.0.0" {
+        detect_local_addresses()
+    } else {
+        vec![Ipv4Addr::LOCALHOST.to_string()]
+    };
     let host = select_primary_host(&config, &addresses).unwrap_or_else(|| {
         addresses
             .first()
@@ -57,11 +78,15 @@ pub fn build_remote_setup_info() -> Result<RemoteSetupInfo, String> {
                 &entry.target,
                 &curl_install_command,
             ));
-            let ssh_codex_path = config
-                .remote_codex_via_ssh
-                .then(|| discover_codex_sessions_dir(&entry.target))
-                .flatten()
-                .map(|path| path.to_string_lossy().to_string());
+            let ssh_codex_path = if probe_ssh {
+                config
+                    .remote_codex_via_ssh
+                    .then(|| discover_codex_sessions_dir(&entry.target))
+                    .flatten()
+                    .map(|path| path.to_string_lossy().to_string())
+            } else {
+                None
+            };
 
             SshTargetSetupInfo {
                 target: entry.target,
@@ -94,6 +119,37 @@ pub fn build_remote_setup_info() -> Result<RemoteSetupInfo, String> {
 }
 
 pub fn detect_local_addresses() -> Vec<String> {
+    detect_local_addresses_inner(false)
+}
+
+pub fn detect_local_addresses_fresh() -> Vec<String> {
+    detect_local_addresses_inner(true)
+}
+
+fn detect_local_addresses_inner(force_refresh: bool) -> Vec<String> {
+    if !force_refresh {
+        if let Ok(cache) = address_cache().lock() {
+            if let Some(entry) = cache.as_ref() {
+                if entry.fetched_at.elapsed() < ADDRESS_CACHE_TTL {
+                    return entry.addresses.clone();
+                }
+            }
+        }
+    }
+
+    let addresses = collect_local_addresses();
+
+    if let Ok(mut cache) = address_cache().lock() {
+        *cache = Some(AddressCache {
+            addresses: addresses.clone(),
+            fetched_at: Instant::now(),
+        });
+    }
+
+    addresses
+}
+
+fn collect_local_addresses() -> Vec<String> {
     let mut addresses = Vec::new();
 
     if let Ok(socket) = UdpSocket::bind("0.0.0.0:0") {
@@ -110,9 +166,17 @@ pub fn detect_local_addresses() -> Vec<String> {
 
     #[cfg(windows)]
     {
+        use std::os::windows::process::CommandExt;
+
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
         if let Ok(output) = Command::new("powershell")
+            .creation_flags(CREATE_NO_WINDOW)
             .args([
                 "-NoProfile",
+                "-NonInteractive",
+                "-WindowStyle",
+                "Hidden",
                 "-Command",
                 "(Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -notlike '127.*' -and $_.PrefixOrigin -ne 'WellKnown' }).IPAddress",
             ])

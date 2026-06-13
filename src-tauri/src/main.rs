@@ -66,6 +66,8 @@ fn main() {
             ipc::get_monitoring_paused,
             ipc::get_ui_config,
             ipc::set_display_mode,
+            ipc::set_done_light_auto_dismiss,
+            ipc::set_auto_update_enabled,
             ipc::get_remote_setup_info,
             ipc::get_app_version,
             ipc::check_for_update,
@@ -215,6 +217,7 @@ fn main() {
             log_info("app", "watchers started");
 
             window.emit("state-changed", aggregator.get_lights())?;
+            let _ = window.emit("config-changed", ipc::get_ui_config());
             log_info("app", "initial state emitted");
 
             if let Ok(resource_dir) = app.path().resource_dir() {
@@ -233,8 +236,15 @@ fn main() {
                 );
             }
 
+            if app_config.http_bind == "0.0.0.0" {
+                // Warm the LAN address cache in the background so opening the
+                // remote panel later never blocks on a cold PowerShell probe.
+                thread::spawn(|| {
+                    let _ = deva_light::remote::detect_local_addresses();
+                });
+            }
             log_info("app", "startup complete");
-            deva_light::updater::spawn_startup_update_check(app.handle());
+            deva_light::updater::spawn_auto_update_service(app.handle(), Arc::clone(&aggregator));
             Ok(())
         })
         .run(tauri::generate_context!())

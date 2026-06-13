@@ -58,6 +58,7 @@ const updateStatusEl = document.getElementById("update-status");
 const updateProgressWrapEl = document.getElementById("update-progress-wrap");
 const updateProgressFillEl = document.getElementById("update-progress-fill");
 const updateProgressTextEl = document.getElementById("update-progress-text");
+const autoUpdateCheckbox = document.getElementById("auto-update-enabled");
 
 const tauriEvent = window.__TAURI__?.event;
 
@@ -85,6 +86,26 @@ async function applyDisplayMode() {
   }
 }
 
+autoDismissDoneCheckbox.addEventListener("change", async () => {
+  try {
+    await invoke("set_done_light_auto_dismiss", {
+      enabled: autoDismissDoneCheckbox.checked,
+    });
+  } catch (error) {
+    console.debug("set_done_light_auto_dismiss", error);
+  }
+});
+
+autoUpdateCheckbox?.addEventListener("change", async () => {
+  try {
+    await invoke("set_auto_update_enabled", {
+      enabled: autoUpdateCheckbox.checked,
+    });
+  } catch (error) {
+    console.debug("set_auto_update_enabled", error);
+  }
+});
+
 notificationsEnabledCheckbox.addEventListener("change", syncNotificationOptions);
 
 saveButton.addEventListener("click", saveSettings);
@@ -98,7 +119,7 @@ prepareUninstallButton.addEventListener("click", prepareUninstall);
 refreshDiagnosticsButton.addEventListener("click", refreshDiagnostics);
 copyDiagnosticsButton.addEventListener("click", copyDiagnostics);
 openAppLogButton.addEventListener("click", openAppLog);
-refreshRemoteButton.addEventListener("click", refreshRemoteSetup);
+refreshRemoteButton.addEventListener("click", () => refreshRemoteSetup(true));
 copyInstallCommandButton.addEventListener("click", copyInstallCommand);
 copySshCommandButton.addEventListener("click", copySshCommand);
 regenerateTokenButton.addEventListener("click", regenerateToken);
@@ -118,6 +139,10 @@ tauriEvent?.listen("update-download-progress", (event) => {
   renderUpdateProgress(event.payload);
 });
 
+tauriEvent?.listen("settings-reload", () => {
+  void loadSettings();
+});
+
 document.querySelectorAll(".copy-inline").forEach((button) => {
   button.addEventListener("click", async () => {
     const target = document.getElementById(button.dataset.copyTarget || "");
@@ -131,7 +156,11 @@ document.querySelectorAll(".copy-inline").forEach((button) => {
   });
 });
 
-loadSettings();
+currentWindow
+  ?.listen?.("tauri://focus", () => {
+    void loadSettings();
+  })
+  .catch?.(() => {});
 
 function switchPanel(panelId) {
   if (!panelId) return;
@@ -222,6 +251,9 @@ async function loadSettings() {
     alwaysOnTopCheckbox.checked = config.alwaysOnTop ?? true;
     setDisplayMode(config.displayMode || "parallel");
     autoDismissDoneCheckbox.checked = config.doneLightAutoDismiss ?? false;
+    if (autoUpdateCheckbox) {
+      autoUpdateCheckbox.checked = config.autoUpdateEnabled ?? true;
+    }
     renderSshTargets(config.remoteSshTargets || []);
     originAliasesInput.value = formatOriginAliases(config.originAliases || []);
     remoteCodexViaSshCheckbox.checked = config.remoteCodexViaSsh ?? true;

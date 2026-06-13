@@ -60,6 +60,7 @@ pub struct AppConfigView {
     pub remote_codex_via_ssh: bool,
     pub origin_aliases: Vec<OriginAliasView>,
     pub http_token: Option<String>,
+    pub auto_update_enabled: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -101,6 +102,7 @@ pub struct AppConfigUpdate {
     pub remote_codex_via_ssh: Option<bool>,
     pub origin_aliases: Option<Vec<OriginAliasView>>,
     pub regenerate_http_token: Option<bool>,
+    pub auto_update_enabled: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -216,6 +218,7 @@ pub fn get_app_config() -> AppConfigView {
         remote_codex_via_ssh: config.remote_codex_via_ssh,
         origin_aliases,
         http_token: config.http_token,
+        auto_update_enabled: config.auto_update_enabled,
     }
 }
 
@@ -233,6 +236,27 @@ pub fn set_display_mode(app: AppHandle, mode: String) -> Result<(), String> {
     config.display_mode = parse_display_mode(&mode)?;
     save_app_config(&config).map_err(|error| error.to_string())?;
     let _ = app.emit("config-changed", get_ui_config());
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_done_light_auto_dismiss(enabled: bool) -> Result<(), String> {
+    let mut config = load_app_config();
+    config.done_light_auto_dismiss = enabled;
+    save_app_config(&config).map_err(|error| error.to_string())?;
+    log_info(
+        "ipc",
+        format!("done_light_auto_dismiss set to {enabled}"),
+    );
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_auto_update_enabled(enabled: bool) -> Result<(), String> {
+    let mut config = load_app_config();
+    config.auto_update_enabled = enabled;
+    save_app_config(&config).map_err(|error| error.to_string())?;
+    log_info("ipc", format!("auto_update_enabled set to {enabled}"));
     Ok(())
 }
 
@@ -309,6 +333,9 @@ pub fn save_app_config_command(
     }
     if let Some(remote_codex_via_ssh) = update.remote_codex_via_ssh {
         config.remote_codex_via_ssh = remote_codex_via_ssh;
+    }
+    if let Some(auto_update_enabled) = update.auto_update_enabled {
+        config.auto_update_enabled = auto_update_enabled;
     }
     if update.regenerate_http_token == Some(true) {
         config.http_token = Some(deva_light::config::generate_http_token());
@@ -472,8 +499,8 @@ pub async fn download_and_install_update(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn get_remote_setup_info() -> Result<RemoteSetupInfo, String> {
-    build_remote_setup_info()
+pub fn get_remote_setup_info(probe_ssh: Option<bool>) -> Result<RemoteSetupInfo, String> {
+    build_remote_setup_info(probe_ssh.unwrap_or(false))
 }
 
 #[tauri::command]
@@ -600,6 +627,7 @@ pub fn open_settings(app: AppHandle, panel: Option<String>) -> Result<(), String
 
     window.show().map_err(|error| error.to_string())?;
     window.set_focus().map_err(|error| error.to_string())?;
+    let _ = window.emit("settings-reload", ());
     if let Some(panel) = panel.filter(|value| !value.trim().is_empty()) {
         let _ = window.emit("open-settings-panel", panel);
     }
