@@ -1,7 +1,9 @@
 use crate::aggregator::StateAggregator;
-use crate::claude_watcher::{claude_session_process_alive, live_claude_session_ids};
+use crate::claude_watcher::{
+    claude_session_process_alive, discover_claude_sessions, live_claude_session_ids,
+};
 use crate::codex_watcher::live_codex_session_ids;
-use crate::cursor_watcher::recent_cursor_session_ids;
+use crate::cursor_watcher::{discover_cursor_sessions, recent_cursor_session_ids};
 use crate::logging::log_info;
 use crate::types::{Status, Tool};
 use serde::Serialize;
@@ -11,6 +13,7 @@ use serde::Serialize;
 pub struct RefreshLightsResult {
     pub removed_sessions: usize,
     pub updated_sessions: usize,
+    pub added_sessions: usize,
 }
 
 pub fn refresh_tracked_sessions(aggregator: &StateAggregator) -> RefreshLightsResult {
@@ -67,9 +70,37 @@ pub fn refresh_tracked_sessions(aggregator: &StateAggregator) -> RefreshLightsRe
         );
     }
 
+    // Proactively discover brand-new sessions so the "refresh" action lights up
+    // lamps immediately instead of waiting for the next watcher poll.
+    let mut added_sessions = 0usize;
+    for (session_id, cwd) in discover_claude_sessions() {
+        if aggregator.session_status(&session_id).is_some() {
+            continue;
+        }
+        if claude_session_process_alive(&session_id) == Some(true) {
+            aggregator.add_session(session_id, Tool::ClaudeCode, &cwd, Status::Working);
+            added_sessions += 1;
+        }
+    }
+    for (session_id, cwd) in discover_cursor_sessions() {
+        if aggregator.session_status(&session_id).is_some() {
+            continue;
+        }
+        aggregator.add_session(session_id, Tool::Cursor, &cwd, Status::Working);
+        added_sessions += 1;
+    }
+
+    if added_sessions > 0 {
+        log_info(
+            "session_refresh",
+            format!("discovered {added_sessions} new session(s)"),
+        );
+    }
+
     RefreshLightsResult {
         removed_sessions,
         updated_sessions,
+        added_sessions,
     }
 }
 
@@ -92,7 +123,9 @@ mod tests {
 
         assert_eq!(result.removed_sessions, 1);
         assert_eq!(result.updated_sessions, 0);
-        assert!(aggregator.get_lights().is_empty());
+        // The phantom must be gone. (Other sessions may be discovered from the
+        // real on-disk state on a developer machine, so don't assert emptiness.)
+        assert!(aggregator.session_status("phantom-claude").is_none());
     }
 
     #[test]
@@ -108,7 +141,8 @@ mod tests {
         let result = refresh_tracked_sessions(&aggregator);
 
         assert_eq!(result.removed_sessions, 0);
-        assert_eq!(aggregator.get_lights().len(), 1);
-        assert_eq!(aggregator.get_lights()[0].status, Status::Error);
+        // Error session is retained; other sessions may be discovered from the
+        // real on-disk state on a developer machine, so assert by id, not count.
+        assert_eq!(aggregator.session_status("broken"), Some(Status::Error));
     }
 }

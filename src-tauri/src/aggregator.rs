@@ -51,7 +51,7 @@ impl StateAggregator {
         let (logical_project_id, project_label) = identify_project(cwd);
         let identity = resolve_origin_identity(cwd, context_path);
         let origin = identity.origin;
-        let light_id = compose_light_id(&logical_project_id, origin);
+        let light_id = compose_light_id(&logical_project_id, origin, tool);
         let workspace_path = cwd.to_string_lossy().to_string();
 
         {

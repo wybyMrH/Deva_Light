@@ -90,6 +90,10 @@ fn main() {
             ipc::install_cursor_hooks_command,
             ipc::remove_hooks_command,
             ipc::preview_hook_config_command,
+            ipc::get_news_sources,
+            ipc::fetch_news,
+            ipc::open_in_browser,
+            ipc::open_news,
             ipc::quit_app
         ])
         .setup(move |app| {
@@ -136,6 +140,16 @@ fn main() {
             if let Some(settings_window) = app.get_webview_window("settings") {
                 let window_to_hide = settings_window.clone();
                 settings_window.on_window_event(move |event| {
+                    if let WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        let _ = window_to_hide.hide();
+                    }
+                });
+            }
+
+            if let Some(news_window) = app.get_webview_window("news") {
+                let window_to_hide = news_window.clone();
+                news_window.on_window_event(move |event| {
                     if let WindowEvent::CloseRequested { api, .. } = event {
                         api.prevent_close();
                         let _ = window_to_hide.hide();
@@ -234,6 +248,14 @@ fn main() {
                     "app",
                     "resource directory unavailable; skipped hook helper install",
                 );
+            }
+
+            // Ensure Cursor hooks exist (idempotent; no-op if Cursor isn't installed).
+            // Cursor has no file-based fallback discovery, so hooks are required for
+            // reliable lamp detection.
+            match deva_light::hook_installer::install_cursor_hooks() {
+                Ok(()) => log_info("app", "Cursor hooks ensured"),
+                Err(error) => log_warn("app", format!("failed to install Cursor hooks: {error}")),
             }
 
             if app_config.http_bind == "0.0.0.0" {

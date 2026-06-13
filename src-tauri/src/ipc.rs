@@ -61,6 +61,7 @@ pub struct AppConfigView {
     pub origin_aliases: Vec<OriginAliasView>,
     pub http_token: Option<String>,
     pub auto_update_enabled: bool,
+    pub news_base_url: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -103,6 +104,7 @@ pub struct AppConfigUpdate {
     pub origin_aliases: Option<Vec<OriginAliasView>>,
     pub regenerate_http_token: Option<bool>,
     pub auto_update_enabled: Option<bool>,
+    pub news_base_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -146,7 +148,7 @@ pub fn open_project(
         return open_path(&path);
     }
 
-    if let Some((logical, _)) = project_id.rsplit_once("@@") {
+    if let Some(logical) = project_id.split("@@").next() {
         if logical.starts_with("git:") {
             return Err("Git 项目请在对应环境（本地/WSL/远程）中打开工作区".to_string());
         }
@@ -219,6 +221,7 @@ pub fn get_app_config() -> AppConfigView {
         origin_aliases,
         http_token: config.http_token,
         auto_update_enabled: config.auto_update_enabled,
+        news_base_url: config.news_base_url,
     }
 }
 
@@ -336,6 +339,14 @@ pub fn save_app_config_command(
     }
     if let Some(auto_update_enabled) = update.auto_update_enabled {
         config.auto_update_enabled = auto_update_enabled;
+    }
+    if let Some(news_base_url) = update.news_base_url {
+        let trimmed = news_base_url.trim();
+        config.news_base_url = if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        };
     }
     if update.regenerate_http_token == Some(true) {
         config.http_token = Some(deva_light::config::generate_http_token());
@@ -635,6 +646,39 @@ pub fn open_settings(app: AppHandle, panel: Option<String>) -> Result<(), String
 }
 
 #[tauri::command]
+pub fn get_news_sources() -> Vec<deva_light::news::NewsSourceView> {
+    deva_light::news::sources().to_vec()
+}
+
+#[tauri::command]
+pub async fn fetch_news(
+    source: String,
+    force: Option<bool>,
+) -> Result<deva_light::news::NewsResult, String> {
+    deva_light::news::fetch_source(&source, force.unwrap_or(false)).await
+}
+
+#[tauri::command]
+pub fn open_in_browser(url: String) -> Result<(), String> {
+    let trimmed = url.trim();
+    if !trimmed.starts_with("http") {
+        return Err("无效的链接".to_string());
+    }
+    open_url(trimmed)
+}
+
+#[tauri::command]
+pub fn open_news(app: AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window("news")
+        .ok_or_else(|| "资讯窗口不可用".to_string())?;
+    window.show().map_err(|error| error.to_string())?;
+    window.set_focus().map_err(|error| error.to_string())?;
+    let _ = window.emit("news-reload", ());
+    Ok(())
+}
+
+#[tauri::command]
 pub fn resize_main_window(app: AppHandle, width: f64, height: f64) -> Result<(), String> {
     let window = app
         .get_webview_window("main")
@@ -817,6 +861,41 @@ fn recent_log(log_path: &PathBuf) -> String {
 
     let lines: Vec<_> = content.lines().rev().take(20).collect();
     lines.into_iter().rev().collect::<Vec<_>>().join("\n")
+}
+
+fn open_url(url: &str) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .map_err(|error| error.to_string())?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(url)
+            .spawn()
+            .map_err(|error| error.to_string())?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(url)
+            .spawn()
+            .map_err(|error| error.to_string())?;
+        return Ok(());
+    }
+
+    #[allow(unreachable_code)]
+    Ok(())
 }
 
 fn platform_open_command(path: &str) -> Result<std::process::Command, String> {

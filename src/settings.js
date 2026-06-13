@@ -59,6 +59,7 @@ const updateProgressWrapEl = document.getElementById("update-progress-wrap");
 const updateProgressFillEl = document.getElementById("update-progress-fill");
 const updateProgressTextEl = document.getElementById("update-progress-text");
 const autoUpdateCheckbox = document.getElementById("auto-update-enabled");
+const newsBaseUrlInput = document.getElementById("news-base-url");
 
 const tauriEvent = window.__TAURI__?.event;
 
@@ -254,6 +255,9 @@ async function loadSettings() {
     if (autoUpdateCheckbox) {
       autoUpdateCheckbox.checked = config.autoUpdateEnabled ?? true;
     }
+    if (newsBaseUrlInput) {
+      newsBaseUrlInput.value = config.newsBaseUrl || "";
+    }
     renderSshTargets(config.remoteSshTargets || []);
     originAliasesInput.value = formatOriginAliases(config.originAliases || []);
     remoteCodexViaSshCheckbox.checked = config.remoteCodexViaSsh ?? true;
@@ -301,6 +305,7 @@ async function saveSettings() {
         remoteSshTargets: collectSshTargets(),
         remoteCodexViaSsh: remoteCodexViaSshCheckbox.checked,
         originAliases: parseOriginAliases(),
+        newsBaseUrl: newsBaseUrlInput ? newsBaseUrlInput.value : "",
       },
     });
 

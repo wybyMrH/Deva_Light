@@ -328,6 +328,7 @@ function createAppHandle() {
     event.preventDefault();
     showMenu(event.clientX, event.clientY, [
       ["刷新状态", () => reconcileLights()],
+      ["休息一下", () => safeInvoke("open_news")],
       ["设置", () => safeInvoke("open_settings", { panel: null })],
       ["检查更新", () => safeInvoke("open_settings", { panel: "about" })],
       ["诊断", () => showDiagnostics()],
@@ -347,6 +348,9 @@ function createProjectLight(lightState) {
   root.dataset.projectId = lightState.project_id;
   const origin = lightState.monitor_origin || lightState.monitorOrigin || "local";
   root.classList.add(`origin-${String(origin).toLowerCase()}`);
+  const primaryTool = String(lightState.sessions?.[0]?.tool || "claude").toLowerCase();
+  root.classList.add(`tool-${primaryTool}`);
+  root.dataset.tool = primaryTool;
 
   // Add session badge
   const badge = document.createElement("div");
@@ -462,6 +466,7 @@ function createProjectLight(lightState) {
       ["打开", () => safeInvoke("open_project", { projectId })],
       ["复制路径", () => copyProjectPath(projectId)],
       ["刷新状态", () => reconcileLights()],
+      ["休息一下", () => safeInvoke("open_news")],
       ["设置", () => safeInvoke("open_settings")],
       ["移除", () => safeInvoke("remove_light", { projectId })],
     ]);
@@ -664,8 +669,10 @@ function toolMeta(tool) {
 function tooltipFor(lightState) {
   const origin = lightState.monitor_origin || lightState.monitorOrigin;
   const status = lightState.status || "Idle";
+  const primaryTool = lightState.sessions?.[0]?.tool;
   const parts = [
     lightState.project_label || lightState.project_id,
+    primaryTool ? `工具: ${primaryTool}` : null,
     origin ? `来源: ${origin}` : null,
     status,
     status === "Error"

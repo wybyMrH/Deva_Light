@@ -20,11 +20,21 @@ pub enum Status {
     Error = 4,   // Flashing red - error / failed retry / auth or network problem
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Tool {
     ClaudeCode,
     Codex,
     Cursor,
+}
+
+impl Tool {
+    pub fn as_key(self) -> &'static str {
+        match self {
+            Self::ClaudeCode => "claude",
+            Self::Codex => "codex",
+            Self::Cursor => "cursor",
+        }
+    }
 }
 
 /// Source of the session (for retention policy)

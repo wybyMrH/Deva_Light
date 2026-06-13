@@ -50,15 +50,7 @@ impl HookEvent {
             return Some(Status::Error);
         }
 
-        let status = Self::event_type_to_status(&self.event_type)?;
-
-        // Cursor shows approval UI after preToolUse; beforeShellExecution only fires
-        // after the user accepts, so we mark Waiting as soon as a tool is proposed.
-        if self.source.as_deref() == Some("cursor") && self.event_type == "pre-tool-use" {
-            return Some(Status::Waiting);
-        }
-
-        Some(status)
+        Self::event_type_to_status(&self.event_type)
     }
 
     pub fn event_type_to_status(event_type: &str) -> Option<Status> {
@@ -768,7 +760,7 @@ mod tests {
     }
 
     #[test]
-    fn cursor_pre_tool_use_maps_to_waiting() {
+    fn cursor_pre_tool_use_maps_to_working() {
         let event = HookEvent {
             event_type: "pre-tool-use".to_string(),
             session_id: "conv-1".to_string(),
@@ -778,6 +770,7 @@ mod tests {
             source: Some("cursor".to_string()),
         };
 
-        assert_eq!(event.resolve_status(), Some(Status::Waiting));
+        // Cursor running a tool (e.g. Bash) is actively working, not waiting.
+        assert_eq!(event.resolve_status(), Some(Status::Working));
     }
 }

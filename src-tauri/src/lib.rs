@@ -12,6 +12,7 @@ pub mod http_server;
 pub mod logging;
 pub mod monitor_origin;
 pub mod monitoring;
+pub mod news;
 pub mod pending_action;
 pub mod project;
 pub mod providers;

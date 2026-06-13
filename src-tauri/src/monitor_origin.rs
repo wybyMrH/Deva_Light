@@ -79,8 +79,12 @@ pub fn detect_monitor_origin_from_cwd(cwd: &Path) -> MonitorOrigin {
     MonitorOrigin::Local
 }
 
-pub fn compose_light_id(logical_project_id: &str, origin: MonitorOrigin) -> String {
-    format!("{logical_project_id}@@{}", origin.as_key())
+pub fn compose_light_id(
+    logical_project_id: &str,
+    origin: MonitorOrigin,
+    tool: crate::types::Tool,
+) -> String {
+    format!("{logical_project_id}@@{}@@{}", origin.as_key(), tool.as_key())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -205,7 +209,11 @@ mod tests {
 
     #[test]
     fn composes_light_id_with_origin_suffix() {
-        let id = compose_light_id("git:https://github.com/foo/bar", MonitorOrigin::Wsl);
-        assert_eq!(id, "git:https://github.com/foo/bar@@wsl");
+        let id = compose_light_id(
+            "git:https://github.com/foo/bar",
+            MonitorOrigin::Wsl,
+            crate::types::Tool::ClaudeCode,
+        );
+        assert_eq!(id, "git:https://github.com/foo/bar@@wsl@@claude");
     }
 }

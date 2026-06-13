@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>休息一下</title>
+    <link rel="stylesheet" href="news.css" />
+  </head>
+  <body>
+    <header class="news-header">
+      <div class="header-title">
+        <strong>休息一下</strong>
+        <span id="news-status" class="news-status"></span>
+      </div>
+      <div class="header-actions">
+        <button id="manage-sources" type="button" title="选择要展示的资讯源">资讯源</button>
+        <button id="refresh-news" type="button" title="刷新获取最新">刷新</button>
+      </div>
+    </header>
+
+    <nav class="category-tabs" id="category-tabs"></nav>
+
+    <main class="news-list" id="news-list"></main>
+
+    <div id="source-manager" class="source-manager" hidden>
+      <div class="source-manager-panel">
+        <div class="source-manager-header">
+          <strong>选择展示的资讯源</strong>
+          <button id="close-source-manager" type="button">完成</button>
+        </div>
+        <div id="source-groups" class="source-groups"></div>
+      </div>
+    </div>
+
+    <script src="news.js" type="module"></script>
+  </body>
+</html>

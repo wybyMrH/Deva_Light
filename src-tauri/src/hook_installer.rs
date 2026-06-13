@@ -266,6 +266,13 @@ pub fn install_claude_hooks() -> Result<(), Box<dyn std::error::Error>> {
 
 pub fn install_cursor_hooks() -> Result<(), Box<dyn std::error::Error>> {
     let hooks_path = get_cursor_hooks_path();
+
+    // No-op when Cursor isn't installed, so startup auto-install is safe for
+    // users who never use Cursor.
+    if hooks_path.parent().is_some_and(|parent| !parent.exists()) {
+        return Ok(());
+    }
+
     let hook_path = get_hook_binary_path();
 
     if !hook_path.exists() {

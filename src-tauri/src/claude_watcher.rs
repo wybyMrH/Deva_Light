@@ -190,6 +190,19 @@ pub(crate) fn live_claude_session_ids() -> HashSet<String> {
         .collect()
 }
 
+/// Claude sessions seen on disk with their working directory, for proactive
+/// discovery when the watcher poll or hooks haven't registered a new session.
+pub(crate) fn discover_claude_sessions() -> Vec<(String, PathBuf)> {
+    let sessions_dir = claude_sessions_dir();
+    let Ok(entries) = scan_session_files(&sessions_dir) else {
+        return Vec::new();
+    };
+    entries
+        .into_iter()
+        .map(|(_file_name, session)| (session.session_id, PathBuf::from(&session.cwd)))
+        .collect()
+}
+
 pub(crate) fn claude_session_process_alive(session_id: &str) -> Option<bool> {
     let sessions_dir = claude_sessions_dir();
     let Ok(entries) = scan_session_files(&sessions_dir) else {

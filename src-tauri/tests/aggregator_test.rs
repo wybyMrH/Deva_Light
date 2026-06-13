@@ -96,7 +96,7 @@ fn done_light_is_removed_when_session_ends() {
 }
 
 #[test]
-fn aggregates_across_tools_by_severity() {
+fn separates_lights_by_tool() {
     let agg = StateAggregator::new();
     let cwd = PathBuf::from("/home/user/project");
 
@@ -105,9 +105,18 @@ fn aggregates_across_tools_by_severity() {
     agg.add_session("s3".to_string(), Tool::Cursor, &cwd, Status::Error);
 
     let lights = agg.get_lights();
-    assert_eq!(lights.len(), 1);
-    assert_eq!(lights[0].status, Status::Error);
-    assert_eq!(lights[0].sessions.len(), 3);
+    // Same project, different tools → one independent lamp per tool.
+    assert_eq!(lights.len(), 3);
+    assert!(lights.iter().all(|light| light.sessions.len() == 1));
+
+    let mut by_tool: std::collections::HashMap<Tool, Status> =
+        std::collections::HashMap::new();
+    for light in &lights {
+        by_tool.insert(light.sessions[0].tool, light.status);
+    }
+    assert_eq!(by_tool.get(&Tool::ClaudeCode), Some(&Status::Working));
+    assert_eq!(by_tool.get(&Tool::Codex), Some(&Status::Waiting));
+    assert_eq!(by_tool.get(&Tool::Cursor), Some(&Status::Error));
 }
 
 #[test]

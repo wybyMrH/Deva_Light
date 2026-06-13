@@ -1,7 +1,7 @@
 use crate::aggregator::StateAggregator;
 use crate::logging::log_info;
 use crate::monitoring::is_monitoring_paused;
-use crate::types::Status;
+use crate::types::{Status, Tool};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -67,8 +67,35 @@ fn run_cursor_watcher(aggregator: Arc<StateAggregator>) {
                     continue;
                 }
 
-                // Cursor live state comes from HTTP hooks. File-based restore on
-                // restart produced too many phantom lamps from old transcripts.
+                // Cursor live state normally comes from HTTP hooks. As a fallback
+                // when a hook is missing or an event is lost, restore a *very
+                // recent* transcript so a fresh Cursor session still lights up
+                // promptly. Old transcripts are ignored to avoid phantom lamps.
+                if is_recent_cursor_activity(entry.last_activity_at) {
+                    if let Some(cwd) = entry.cwd.as_deref() {
+                        log_info(
+                            "cursor_watcher",
+                            format!(
+                                "restored recent Cursor session {} at {}",
+                                entry.session_id,
+                                cwd.display()
+                            ),
+                        );
+                        aggregator.add_session(
+                            entry.session_id.clone(),
+                            Tool::Cursor,
+                            cwd,
+                            Status::Working,
+                        );
+                    }
+                }
+
+                tracked
+                    .entry(entry.session_id.clone())
+                    .or_insert_with(|| TrackedCursorSession {
+                        session_id: entry.session_id.clone(),
+                        last_activity_at: entry.last_activity_at,
+                    });
             }
 
             let stale_ids: Vec<String> = tracked
@@ -114,6 +141,7 @@ fn run_cursor_watcher(aggregator: Arc<StateAggregator>) {
 struct CursorSessionEntry {
     session_id: String,
     last_activity_at: SystemTime,
+    cwd: Option<PathBuf>,
 }
 
 pub(crate) fn recent_cursor_session_ids() -> HashSet<String> {
@@ -138,6 +166,32 @@ pub(crate) fn recent_cursor_session_ids() -> HashSet<String> {
         .collect()
 }
 
+/// Only treat a transcript as a live Cursor session if it was written very
+/// recently, so historical transcripts don't create phantom lamps.
+fn is_recent_cursor_activity(time: SystemTime) -> bool {
+    time.elapsed()
+        .map(|elapsed| elapsed < Duration::from_secs(5 * 60))
+        .unwrap_or(false)
+}
+
+/// Recent Cursor sessions with their decoded working directory, for proactive
+/// discovery. Only very recent transcripts are returned to avoid phantom lamps.
+pub(crate) fn discover_cursor_sessions() -> Vec<(String, PathBuf)> {
+    let projects_dir = cursor_projects_dir();
+    let Ok(entries) = scan_cursor_sessions(&projects_dir) else {
+        return Vec::new();
+    };
+    entries
+        .into_iter()
+        .filter_map(|entry| {
+            if !is_recent_cursor_activity(entry.last_activity_at) {
+                return None;
+            }
+            entry.cwd.map(|cwd| (entry.session_id, cwd))
+        })
+        .collect()
+}
+
 fn scan_cursor_sessions(projects_dir: &Path) -> Result<Vec<CursorSessionEntry>, std::io::Error> {
     if !projects_dir.exists() {
         return Ok(Vec::new());
@@ -152,14 +206,13 @@ fn scan_cursor_sessions(projects_dir: &Path) -> Result<Vec<CursorSessionEntry>, 
             continue;
         }
 
-        if project_path
+        let Some(cwd) = project_path
             .file_name()
             .and_then(|name| name.to_str())
             .and_then(decode_cursor_project_slug)
-            .is_none()
-        {
+        else {
             continue;
-        }
+        };
 
         let transcripts_dir = project_path.join("agent-transcripts");
         if !transcripts_dir.exists() {
@@ -184,6 +237,7 @@ fn scan_cursor_sessions(projects_dir: &Path) -> Result<Vec<CursorSessionEntry>, 
             results.push(CursorSessionEntry {
                 session_id: session_id.to_string(),
                 last_activity_at,
+                cwd: Some(cwd.clone()),
             });
         }
     }
