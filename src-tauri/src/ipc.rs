@@ -62,6 +62,7 @@ pub struct AppConfigView {
     pub http_token: Option<String>,
     pub auto_update_enabled: bool,
     pub news_base_url: Option<String>,
+    pub proxy_url: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -105,6 +106,7 @@ pub struct AppConfigUpdate {
     pub regenerate_http_token: Option<bool>,
     pub auto_update_enabled: Option<bool>,
     pub news_base_url: Option<String>,
+    pub proxy_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -222,6 +224,7 @@ pub fn get_app_config() -> AppConfigView {
         http_token: config.http_token,
         auto_update_enabled: config.auto_update_enabled,
         news_base_url: config.news_base_url,
+        proxy_url: config.proxy_url,
     }
 }
 
@@ -343,6 +346,14 @@ pub fn save_app_config_command(
     if let Some(news_base_url) = update.news_base_url {
         let trimmed = news_base_url.trim();
         config.news_base_url = if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        };
+    }
+    if let Some(proxy_url) = update.proxy_url {
+        let trimmed = proxy_url.trim();
+        config.proxy_url = if trimmed.is_empty() {
             None
         } else {
             Some(trimmed.to_string())

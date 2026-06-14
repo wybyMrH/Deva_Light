@@ -148,9 +148,21 @@ fn cached_result(source: &str, entry: &CacheEntry) -> NewsResult {
 
 async fn fetch_remote(source: &str) -> Result<NewsResult, String> {
     let url = format!("{}/api/s?id={}", base_url(), source);
-    let client = reqwest::Client::builder()
+    let mut builder = reqwest::Client::builder()
         .timeout(REQUEST_TIMEOUT)
-        .user_agent(BROWSER_USER_AGENT)
+        .user_agent(BROWSER_USER_AGENT);
+    let config = crate::config::load_app_config();
+    if let Some(proxy_url) = config
+        .proxy_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if let Ok(proxy) = reqwest::Proxy::all(proxy_url) {
+            builder = builder.proxy(proxy);
+        }
+    }
+    let client = builder
         .build()
         .map_err(|error| format!("构建请求失败: {error}"))?;
 

@@ -87,6 +87,8 @@ pub struct AppConfig {
     pub auto_update_enabled: bool,
     #[serde(default)]
     pub news_base_url: Option<String>,
+    #[serde(default)]
+    pub proxy_url: Option<String>,
 }
 
 fn default_auto_update_enabled() -> bool {
@@ -134,6 +136,7 @@ impl Default for AppConfig {
             ssh_discovery_dismissed: Vec::new(),
             auto_update_enabled: true,
             news_base_url: None,
+            proxy_url: None,
         }
     }
 }
