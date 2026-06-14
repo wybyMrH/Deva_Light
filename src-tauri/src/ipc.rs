@@ -855,12 +855,33 @@ fn home_dir() -> Option<PathBuf> {
 }
 
 fn recent_log(log_path: &PathBuf) -> String {
-    let Ok(content) = fs::read_to_string(log_path) else {
+    use std::io::{Read, Seek, SeekFrom};
+    let Ok(mut file) = fs::File::open(log_path) else {
         return String::new();
     };
-
-    let lines: Vec<_> = content.lines().rev().take(20).collect();
-    lines.into_iter().rev().collect::<Vec<_>>().join("\n")
+    let size = file.metadata().map(|meta| meta.len()).unwrap_or(0);
+    if size == 0 {
+        return String::new();
+    }
+    // Read only the tail of the log. The file grows to many MB and reading it
+    // fully on every diagnostics call was the main cause of settings-panel lag.
+    const TAIL: u64 = 16 * 1024;
+    let start = size.saturating_sub(TAIL);
+    if file.seek(SeekFrom::Start(start)).is_err() {
+        return String::new();
+    }
+    let mut buffer = Vec::new();
+    if file.read_to_end(&mut buffer).is_err() {
+        return String::new();
+    }
+    let text = String::from_utf8_lossy(&buffer);
+    let mut lines: Vec<&str> = text.lines().collect();
+    // First line after a mid-file seek is likely partial; drop it.
+    if start > 0 && !lines.is_empty() {
+        lines.remove(0);
+    }
+    let start_idx = lines.len().saturating_sub(20);
+    lines[start_idx..].join("\n")
 }
 
 fn open_url(url: &str) -> Result<(), String> {

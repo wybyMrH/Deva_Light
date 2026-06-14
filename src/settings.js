@@ -111,6 +111,31 @@ notificationsEnabledCheckbox.addEventListener("change", syncNotificationOptions)
 
 saveButton.addEventListener("click", saveSettings);
 closeButton.addEventListener("click", closeSettings);
+
+// Save button reflects unsaved changes: disabled (grey) until the user edits
+// something. Fields that save instantly (display mode / auto-dismiss /
+// auto-update) are excluded since they don't need the Save button.
+function markDirty() {
+  saveButton.disabled = false;
+}
+function markClean() {
+  saveButton.disabled = true;
+}
+saveButton.disabled = true;
+const INSTANT_SAVE_SELECTOR =
+  '[name="display-mode"], #auto-dismiss-done, #auto-update-enabled';
+document.addEventListener("change", (event) => {
+  const target = event.target;
+  if (!target.matches?.("input, textarea, select")) return;
+  if (target.matches?.(INSTANT_SAVE_SELECTOR)) return;
+  markDirty();
+});
+document.addEventListener("input", (event) => {
+  const target = event.target;
+  if (!target.matches?.("input, textarea, select")) return;
+  if (target.matches?.(INSTANT_SAVE_SELECTOR)) return;
+  markDirty();
+});
 configPathEl.addEventListener("click", openConfigDir);
 addSshTargetButton?.addEventListener("click", () => addSshTargetRow());
 installIntegrationButton.addEventListener("click", installIntegration);
@@ -276,6 +301,7 @@ async function loadSettings() {
 
     await Promise.allSettled([refreshDiagnostics(), refreshRemoteSetup()]);
     setStatus("");
+    markClean();
   } catch (error) {
     setStatus(String(error), true);
     void loadAppVersion();
@@ -322,6 +348,7 @@ async function saveSettings() {
         ? "已保存，HTTP 服务已热重载。"
         : "已保存。Codex 监控器将在约 1 秒后重载路径变更。",
     );
+    markClean();
   } catch (error) {
     setStatus(String(error), true);
   } finally {
