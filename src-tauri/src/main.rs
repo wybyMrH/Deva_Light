@@ -283,6 +283,17 @@ fn main() {
                 Err(error) => log_warn("app", format!("failed to install Cursor hooks: {error}")),
             }
 
+            // Refresh WSL hooks on startup to ensure the embedded HTTP port matches
+            // the current runtime.json (the port may change if http_port is None or
+            // the previous port was occupied).
+            #[cfg(target_os = "windows")]
+            {
+                match deva_light::hook_installer::refresh_wsl_hooks() {
+                    Ok(()) => log_info("app", "WSL hooks refreshed"),
+                    Err(error) => log_warn("app", format!("failed to refresh WSL hooks: {error}")),
+                }
+            }
+
             if app_config.http_bind == "0.0.0.0" {
                 // Warm the LAN address cache in the background so opening the
                 // remote panel later never blocks on a cold PowerShell probe.
