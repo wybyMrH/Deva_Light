@@ -250,8 +250,9 @@ fn main() {
                         let app_for_notify = app_handle_for_notify.clone();
                         let title_for_notify = title;
                         let body_for_notify = body;
+                        let app_clone = app_for_notify.clone();
                         let _ = app_for_notify.run_on_main_thread(move || {
-                            if let Err(error) = app_for_notify
+                            if let Err(error) = app_clone
                                 .notification()
                                 .builder()
                                 .title(title_for_notify)
