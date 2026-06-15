@@ -184,7 +184,9 @@ fn main() {
 
             let emit_aggregator = Arc::clone(&aggregator);
             let emit_window = window.clone();
-            let app_handle = app.handle().clone();
+            #[cfg(target_os = "macos")]
+            let app_handle_for_ui = app.handle().clone();
+            let app_handle_for_notify = app.handle().clone();
             let last_light_statuses = Mutex::new(HashMap::<String, Status>::new());
 
             aggregator.set_on_change(move || {
@@ -193,7 +195,21 @@ fn main() {
 
                 let config = load_app_config();
                 let pin_window = config.always_on_top && emit_aggregator.has_active_lights();
-                let _ = apply_main_window_pin(&emit_window, pin_window);
+
+                // macOS requires UI operations (like set_always_on_top) to run on the main thread.
+                // Use run_on_main_thread to dispatch the window pin operation safely.
+                #[cfg(target_os = "macos")]
+                {
+                    let window_for_pin = emit_window.clone();
+                    let app_for_pin = app_handle_for_ui.clone();
+                    let _ = app_for_pin.run_on_main_thread(move || {
+                        let _ = apply_main_window_pin(&window_for_pin, pin_window);
+                    });
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    let _ = apply_main_window_pin(&emit_window, pin_window);
+                }
 
                 if !config.notifications_enabled {
                     return;
@@ -227,17 +243,42 @@ fn main() {
                         Status::Done => "任务已完成".to_string(),
                         _ => String::new(),
                     };
-                    if let Err(error) = app_handle
-                        .notification()
-                        .builder()
-                        .title(title)
-                        .body(body)
-                        .show()
+
+                    // Notifications on macOS also require main thread dispatch.
+                    #[cfg(target_os = "macos")]
                     {
-                        log_warn(
-                            "notification",
-                            format!("failed to show notification: {error}"),
-                        );
+                        let app_for_notify = app_handle_for_notify.clone();
+                        let title_for_notify = title;
+                        let body_for_notify = body;
+                        let _ = app_for_notify.run_on_main_thread(move || {
+                            if let Err(error) = app_for_notify
+                                .notification()
+                                .builder()
+                                .title(title_for_notify)
+                                .body(body_for_notify)
+                                .show()
+                            {
+                                log_warn(
+                                    "notification",
+                                    format!("failed to show notification: {error}"),
+                                );
+                            }
+                        });
+                    }
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        if let Err(error) = app_handle_for_notify
+                            .notification()
+                            .builder()
+                            .title(title)
+                            .body(body)
+                            .show()
+                        {
+                            log_warn(
+                                "notification",
+                                format!("failed to show notification: {error}"),
+                            );
+                        }
                     }
                 }
 
