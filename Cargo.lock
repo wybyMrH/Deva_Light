@@ -826,6 +826,7 @@ dependencies = [
  "icns",
  "libc",
  "objc2-app-kit",
+ "once_cell",
  "parking_lot",
  "reqwest 0.12.28",
  "rfd",

@@ -183,11 +183,8 @@ document.querySelectorAll(".copy-inline").forEach((button) => {
   });
 });
 
-currentWindow
-  ?.listen?.("tauri://focus", () => {
-    void loadSettings();
-  })
-  .catch?.(() => {});
+// Removed focus-triggered reload - it was causing UI lag by reloading
+// everything whenever the window gained focus (e.g. switching apps)
 
 function switchPanel(panelId) {
   if (!panelId) return;

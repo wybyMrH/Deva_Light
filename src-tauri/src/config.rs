@@ -3,6 +3,52 @@ use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
+
+/// Global config cache to avoid repeated disk reads.
+/// This is especially important because get_lights() is called every second
+/// and previously read config.json from disk each time.
+static CONFIG_CACHE: once_cell::sync::Lazy<Arc<RwLock<AppConfig>>> =
+    once_cell::sync::Lazy::new(|| Arc::new(RwLock::new(load_app_config_from_disk())));
+
+/// Load config from disk (internal function, use get_cached_config() instead)
+fn load_app_config_from_disk() -> AppConfig {
+    let path = get_config_path();
+    let Ok(content) = fs::read_to_string(path) else {
+        return AppConfig::default();
+    };
+
+    let content = content.strip_prefix('\u{feff}').unwrap_or(&content);
+    let value: serde_json::Value =
+        serde_json::from_str(content).unwrap_or(serde_json::Value::Object(Default::default()));
+    let mut config: AppConfig = serde_json::from_value(value.clone()).unwrap_or_default();
+    migrate_legacy_ssh_target(&mut config, &value);
+    config
+}
+
+/// Get cached config (fast, no disk I/O)
+pub fn get_cached_config() -> AppConfig {
+    CONFIG_CACHE
+        .read()
+        .expect("config cache lock poisoned")
+        .clone()
+}
+
+/// Refresh cache from disk (call after saving config)
+pub fn refresh_config_cache() {
+    let new_config = load_app_config_from_disk();
+    *CONFIG_CACHE.write().expect("config cache lock poisoned") = new_config;
+}
+
+/// Update cache with new config directly (faster than refresh from disk)
+pub fn update_config_cache(config: &AppConfig) {
+    *CONFIG_CACHE.write().expect("config cache lock poisoned") = config.clone();
+}
+
+/// Legacy function - now uses cache. Kept for backwards compatibility.
+pub fn load_app_config() -> AppConfig {
+    get_cached_config()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
@@ -204,20 +250,6 @@ pub fn get_log_path() -> PathBuf {
     get_config_dir().join("deva-light.log")
 }
 
-pub fn load_app_config() -> AppConfig {
-    let path = get_config_path();
-    let Ok(content) = fs::read_to_string(path) else {
-        return AppConfig::default();
-    };
-
-    let content = content.strip_prefix('\u{feff}').unwrap_or(&content);
-    let value: serde_json::Value =
-        serde_json::from_str(content).unwrap_or(serde_json::Value::Object(Default::default()));
-    let mut config: AppConfig = serde_json::from_value(value.clone()).unwrap_or_default();
-    migrate_legacy_ssh_target(&mut config, &value);
-    config
-}
-
 fn migrate_legacy_ssh_target(config: &mut AppConfig, value: &serde_json::Value) {
     if !config.remote_ssh_targets.is_empty() {
         return;
@@ -250,7 +282,10 @@ fn migrate_legacy_ssh_target(config: &mut AppConfig, value: &serde_json::Value) 
 pub fn save_app_config(config: &AppConfig) -> io::Result<()> {
     fs::create_dir_all(get_config_dir())?;
     let content = serde_json::to_string_pretty(config).map_err(io::Error::other)?;
-    fs::write(get_config_path(), content)
+    fs::write(get_config_path(), content)?;
+    // Update cache after saving so subsequent reads are consistent
+    update_config_cache(config);
+    Ok(())
 }
 
 pub fn load_runtime_config() -> Option<RuntimeConfig> {
