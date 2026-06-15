@@ -53,7 +53,10 @@ pub fn normalize_path_key(path: &str) -> String {
 
     let lower = normalized.to_lowercase();
     if lower.starts_with("//wsl.localhost/") || lower.starts_with("//wsl$/") {
-        let segments: Vec<&str> = normalized.split('/').filter(|part| !part.is_empty()).collect();
+        let segments: Vec<&str> = normalized
+            .split('/')
+            .filter(|part| !part.is_empty())
+            .collect();
         if segments.len() >= 3 {
             let distro = segments[2].to_lowercase();
             let tail = segments[3..].join("/").to_lowercase();

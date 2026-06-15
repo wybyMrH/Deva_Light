@@ -889,11 +889,7 @@ pub(crate) fn live_codex_session_ids() -> HashSet<String> {
     let tracked_paths = HashSet::new();
     let mut session_ids = HashSet::new();
 
-    for root in roots
-        .active
-        .iter()
-        .chain(roots.missing.iter())
-    {
+    for root in roots.active.iter().chain(roots.missing.iter()) {
         let Ok(rollouts) = find_rollout_files(root, &tracked_paths, false) else {
             continue;
         };

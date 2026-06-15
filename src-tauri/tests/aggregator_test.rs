@@ -109,8 +109,7 @@ fn separates_lights_by_tool() {
     assert_eq!(lights.len(), 3);
     assert!(lights.iter().all(|light| light.sessions.len() == 1));
 
-    let mut by_tool: std::collections::HashMap<Tool, Status> =
-        std::collections::HashMap::new();
+    let mut by_tool: std::collections::HashMap<Tool, Status> = std::collections::HashMap::new();
     for light in &lights {
         by_tool.insert(light.sessions[0].tool, light.status);
     }

@@ -1,10 +1,10 @@
 use crate::config::{ensure_http_token, load_app_config, save_app_config, AppConfig};
 use crate::ssh_remote::discover_codex_sessions_dir;
 use std::net::{IpAddr, Ipv4Addr, UdpSocket};
-use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant};
 #[cfg(windows)]
 use std::process::Command;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 struct AddressCache {
     addresses: Vec<String>,

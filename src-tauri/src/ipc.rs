@@ -137,7 +137,9 @@ pub fn get_lights(aggregator: State<Arc<StateAggregator>>) -> Vec<LightState> {
 }
 
 #[tauri::command]
-pub fn refresh_lights(aggregator: State<Arc<StateAggregator>>) -> deva_light::session_refresh::RefreshLightsResult {
+pub fn refresh_lights(
+    aggregator: State<Arc<StateAggregator>>,
+) -> deva_light::session_refresh::RefreshLightsResult {
     deva_light::session_refresh::refresh_tracked_sessions(&aggregator)
 }
 
@@ -250,10 +252,7 @@ pub fn set_done_light_auto_dismiss(enabled: bool) -> Result<(), String> {
     let mut config = load_app_config();
     config.done_light_auto_dismiss = enabled;
     save_app_config(&config).map_err(|error| error.to_string())?;
-    log_info(
-        "ipc",
-        format!("done_light_auto_dismiss set to {enabled}"),
-    );
+    log_info("ipc", format!("done_light_auto_dismiss set to {enabled}"));
     Ok(())
 }
 

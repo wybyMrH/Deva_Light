@@ -22,26 +22,106 @@ pub struct NewsSourceView {
 /// Curated, verified source list (each id was probed against the live API).
 /// Users pick which ones to show inside the panel.
 pub const NEWS_SOURCES: &[NewsSourceView] = &[
-    NewsSourceView { id: "zhihu", name: "知乎", category: "综合热榜" },
-    NewsSourceView { id: "weibo", name: "微博", category: "综合热榜" },
-    NewsSourceView { id: "baidu", name: "百度", category: "综合热榜" },
-    NewsSourceView { id: "toutiao", name: "今日头条", category: "综合热榜" },
-    NewsSourceView { id: "douyin", name: "抖音", category: "综合热榜" },
-    NewsSourceView { id: "bilibili", name: "哔哩哔哩", category: "综合热榜" },
-    NewsSourceView { id: "ithome", name: "IT之家", category: "科技" },
-    NewsSourceView { id: "sspai", name: "少数派", category: "科技" },
-    NewsSourceView { id: "juejin", name: "掘金", category: "科技" },
-    NewsSourceView { id: "solidot", name: "Solidot", category: "科技" },
-    NewsSourceView { id: "coolapk", name: "酷安", category: "科技" },
-    NewsSourceView { id: "v2ex", name: "V2EX", category: "社区" },
-    NewsSourceView { id: "nowcoder", name: "牛客网", category: "社区" },
-    NewsSourceView { id: "hackernews", name: "Hacker News", category: "国际" },
-    NewsSourceView { id: "producthunt", name: "Product Hunt", category: "国际" },
-    NewsSourceView { id: "github-trending-today", name: "GitHub Trending", category: "国际" },
-    NewsSourceView { id: "jin10", name: "金十数据", category: "财经" },
-    NewsSourceView { id: "wallstreetcn", name: "华尔街见闻", category: "财经" },
-    NewsSourceView { id: "xueqiu", name: "雪球", category: "财经" },
-    NewsSourceView { id: "zaobao", name: "联合早报", category: "其他" },
+    NewsSourceView {
+        id: "zhihu",
+        name: "知乎",
+        category: "综合热榜",
+    },
+    NewsSourceView {
+        id: "weibo",
+        name: "微博",
+        category: "综合热榜",
+    },
+    NewsSourceView {
+        id: "baidu",
+        name: "百度",
+        category: "综合热榜",
+    },
+    NewsSourceView {
+        id: "toutiao",
+        name: "今日头条",
+        category: "综合热榜",
+    },
+    NewsSourceView {
+        id: "douyin",
+        name: "抖音",
+        category: "综合热榜",
+    },
+    NewsSourceView {
+        id: "bilibili",
+        name: "哔哩哔哩",
+        category: "综合热榜",
+    },
+    NewsSourceView {
+        id: "ithome",
+        name: "IT之家",
+        category: "科技",
+    },
+    NewsSourceView {
+        id: "sspai",
+        name: "少数派",
+        category: "科技",
+    },
+    NewsSourceView {
+        id: "juejin",
+        name: "掘金",
+        category: "科技",
+    },
+    NewsSourceView {
+        id: "solidot",
+        name: "Solidot",
+        category: "科技",
+    },
+    NewsSourceView {
+        id: "coolapk",
+        name: "酷安",
+        category: "科技",
+    },
+    NewsSourceView {
+        id: "v2ex",
+        name: "V2EX",
+        category: "社区",
+    },
+    NewsSourceView {
+        id: "nowcoder",
+        name: "牛客网",
+        category: "社区",
+    },
+    NewsSourceView {
+        id: "hackernews",
+        name: "Hacker News",
+        category: "国际",
+    },
+    NewsSourceView {
+        id: "producthunt",
+        name: "Product Hunt",
+        category: "国际",
+    },
+    NewsSourceView {
+        id: "github-trending-today",
+        name: "GitHub Trending",
+        category: "国际",
+    },
+    NewsSourceView {
+        id: "jin10",
+        name: "金十数据",
+        category: "财经",
+    },
+    NewsSourceView {
+        id: "wallstreetcn",
+        name: "华尔街见闻",
+        category: "财经",
+    },
+    NewsSourceView {
+        id: "xueqiu",
+        name: "雪球",
+        category: "财经",
+    },
+    NewsSourceView {
+        id: "zaobao",
+        name: "联合早报",
+        category: "其他",
+    },
 ];
 
 pub fn sources() -> &'static [NewsSourceView] {
