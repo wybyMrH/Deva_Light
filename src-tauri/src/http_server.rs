@@ -8,7 +8,6 @@ use crate::config::{
 };
 use crate::error_detection::text_looks_like_error;
 use crate::logging::{log_error, log_info, log_warn};
-use crate::providers;
 use crate::types::{Status, Tool};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -52,8 +51,15 @@ impl HookEvent {
 
         // Cursor fires `stop` after each agent turn while the chat stays open.
         // Treat it as idle between turns; only `session-end` ends the session.
-        if self.source.as_deref() == Some("cursor") && self.event_type == "stop" {
+        if self.resolve_provider() == ProviderId::Cursor && self.event_type == "stop" {
             return Some(Status::Idle);
+        }
+
+        if self.resolve_provider() == ProviderId::Cursor
+            && self.event_type == "pre-tool-use"
+            && cursor_pre_tool_use_needs_approval(self)
+        {
+            return Some(Status::Waiting);
         }
 
         Self::event_type_to_status(&self.event_type)
@@ -127,7 +133,14 @@ impl HookEvent {
     }
 
     pub fn resolve_provider(&self) -> ProviderId {
-        providers::provider_from_source(self.source.as_deref())
+        let inferred = infer_provider_from_event_type(&self.event_type);
+        match self.source.as_deref() {
+            Some("cursor") => ProviderId::Cursor,
+            Some("claude") if inferred == ProviderId::Cursor => ProviderId::Cursor,
+            Some("claude") => ProviderId::ClaudeCode,
+            None => inferred,
+            _ => inferred,
+        }
     }
 
     pub fn to_agent_event(&self) -> AgentEvent {
@@ -179,6 +192,44 @@ impl HookEvent {
 
         matches!(self.event_type.as_str(), "session-start" | "session-end")
     }
+}
+
+fn infer_provider_from_event_type(event_type: &str) -> ProviderId {
+    match event_type {
+        "before-submit-prompt"
+        | "before-shell-execution"
+        | "after-shell-execution"
+        | "before-mcp-execution"
+        | "after-mcp-execution"
+        | "before-read-file"
+        | "after-file-edit"
+        | "after-agent-response"
+        | "after-agent-thought"
+        | "subagent-start"
+        | "subagent-stop"
+        | "pre-compact" => ProviderId::Cursor,
+        _ => ProviderId::ClaudeCode,
+    }
+}
+
+fn cursor_pre_tool_use_needs_approval(event: &HookEvent) -> bool {
+    let tool = event
+        .tool_call
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+
+    if tool.is_empty() {
+        return false;
+    }
+
+    matches!(
+        tool.as_str(),
+        "shell" | "bash" | "run_terminal_cmd" | "terminal" | "execute" | "command"
+    ) || tool.contains("shell")
+        || tool.contains("terminal")
+        || tool.contains("command")
 }
 
 fn waiting_title(provider: ProviderId, event: &HookEvent) -> String {
@@ -627,7 +678,10 @@ fn should_apply_status_transition(
         return true;
     }
 
-    if source == Some("cursor") {
+    let cursor_event = source == Some("cursor")
+        || infer_provider_from_event_type(event_type) == ProviderId::Cursor;
+
+    if cursor_event {
         return matches!(
             event_type,
             "post-tool-use"
@@ -768,7 +822,7 @@ mod tests {
     }
 
     #[test]
-    fn cursor_pre_tool_use_maps_to_working() {
+    fn cursor_shell_pre_tool_use_maps_to_waiting() {
         let event = HookEvent {
             event_type: "pre-tool-use".to_string(),
             session_id: "conv-1".to_string(),
@@ -778,7 +832,6 @@ mod tests {
             source: Some("cursor".to_string()),
         };
 
-        // Cursor running a tool (e.g. Bash) is actively working, not waiting.
-        assert_eq!(event.resolve_status(), Some(Status::Working));
+        assert_eq!(event.resolve_status(), Some(Status::Waiting));
     }
 }

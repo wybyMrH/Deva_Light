@@ -45,6 +45,9 @@ fn run_cursor_watcher(aggregator: Arc<StateAggregator>) {
         if let Ok(entries) = scan_cursor_sessions(&projects_dir) {
             let now = SystemTime::now();
             let mut seen = HashMap::new();
+            let mut transcript_restored_cwds: HashSet<PathBuf> = HashSet::new();
+            let mut entries = entries;
+            entries.sort_by(|left, right| right.last_activity_at.cmp(&left.last_activity_at));
 
             for entry in entries {
                 seen.insert(entry.session_id.clone(), true);
@@ -67,7 +70,11 @@ fn run_cursor_watcher(aggregator: Arc<StateAggregator>) {
                         existing.last_activity_at = entry.last_activity_at;
                     }
                     if aggregator.session_status(&entry.session_id).is_none()
-                        && is_recent_cursor_activity(entry.last_activity_at, RESTORE_RECENT_AFTER)
+                        && should_restore_from_transcript(
+                            &aggregator,
+                            &entry,
+                            &transcript_restored_cwds,
+                        )
                     {
                         if let Some(cwd) = entry.cwd.as_deref() {
                             log_info(
@@ -84,6 +91,7 @@ fn run_cursor_watcher(aggregator: Arc<StateAggregator>) {
                                 cwd,
                                 Status::Working,
                             );
+                            transcript_restored_cwds.insert(cwd.to_path_buf());
                         }
                     }
                     continue;
@@ -93,7 +101,7 @@ fn run_cursor_watcher(aggregator: Arc<StateAggregator>) {
                 // when a hook is missing or an event is lost, restore a *very
                 // recent* transcript so a fresh Cursor session still lights up
                 // promptly. Old transcripts are ignored to avoid phantom lamps.
-                if is_recent_cursor_activity(entry.last_activity_at, RESTORE_RECENT_AFTER) {
+                if should_restore_from_transcript(&aggregator, &entry, &transcript_restored_cwds) {
                     if let Some(cwd) = entry.cwd.as_deref() {
                         log_info(
                             "cursor_watcher",
@@ -109,6 +117,7 @@ fn run_cursor_watcher(aggregator: Arc<StateAggregator>) {
                             cwd,
                             Status::Working,
                         );
+                        transcript_restored_cwds.insert(cwd.to_path_buf());
                     }
                 }
 
@@ -198,6 +207,30 @@ fn is_recent_cursor_activity(time: SystemTime, window: Duration) -> bool {
     time.elapsed()
         .map(|elapsed| elapsed < window)
         .unwrap_or(false)
+}
+
+fn should_restore_from_transcript(
+    aggregator: &StateAggregator,
+    entry: &CursorSessionEntry,
+    restored_cwds: &HashSet<PathBuf>,
+) -> bool {
+    if !is_recent_cursor_activity(entry.last_activity_at, RESTORE_RECENT_AFTER) {
+        return false;
+    }
+
+    let Some(cwd) = entry.cwd.as_ref() else {
+        return false;
+    };
+
+    if restored_cwds.contains(cwd) {
+        return false;
+    }
+
+    if aggregator.has_cursor_session_for_cwd(cwd) {
+        return false;
+    }
+
+    true
 }
 
 /// Recent Cursor sessions with their decoded working directory, for proactive

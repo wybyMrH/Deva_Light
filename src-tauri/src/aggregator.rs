@@ -195,6 +195,21 @@ impl StateAggregator {
             .is_some_and(|at| at.elapsed() < within)
     }
 
+    pub fn has_cursor_session_for_cwd(&self, cwd: &Path) -> bool {
+        let cwd_key = cwd.to_string_lossy();
+        let state = self.state.read().expect("aggregator state lock poisoned");
+        state.lights.values().any(|light| {
+            light
+                .workspace_path
+                .as_deref()
+                .is_some_and(|workspace| workspace == cwd_key.as_ref())
+                && light
+                    .sessions
+                    .iter()
+                    .any(|session| session.tool == Tool::Cursor)
+        })
+    }
+
     pub fn record_hook_activity(&self, session_id: &str) {
         let mut changed = false;
 

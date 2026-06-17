@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.2.1 - 2026-06-17
+
+- 修复 Cursor 单任务误显示多条无用会话：subagent/generation UUID 不再单独建灯，transcript 兜底仅恢复 5 分钟内且同项目不重复。
+- 修复 Cursor 会话误标为 Claude：hook 与 HTTP 服务端按事件类型和 payload 特征正确识别 Cursor，优先使用 `conversation_id`。
+- 修复 Cursor「Run in background」等 shell 确认不再跳黄灯：`preToolUse` 的 shell 类工具恢复为 Waiting（黄灯），Read 等仍保持 Working（绿灯）。
+
 ## v0.1.35 - 2026-06-17
 
 - 修复 Cursor 会话几分钟内灯莫名消失：Cursor 每轮 `stop` 不再标为 Done，改为 Idle 并保持灯可见；仅 `session-end` 结束会话。

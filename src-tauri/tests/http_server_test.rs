@@ -109,14 +109,42 @@ fn cursor_stop_between_turns_maps_to_idle() {
 }
 
 #[test]
-fn cursor_pre_tool_use_resolves_to_working() {
+fn infers_cursor_from_after_agent_thought_without_source() {
+    let event =
+        parse_hook_event(r#"{"event_type":"after-agent-thought","session_id":"conv-1"}"#).unwrap();
+
+    assert_eq!(event.resolve_tool(), deva_light::types::Tool::Cursor);
+}
+
+#[test]
+fn cursor_shell_pre_tool_use_resolves_to_waiting() {
     let event = parse_hook_event(
-        r#"{"event_type":"pre-tool-use","session_id":"conv-1","source":"cursor","tool_call":"Shell"}"#,
+            r#"{"event_type":"pre-tool-use","session_id":"conv-1","source":"cursor","tool_call":"Shell"}"#,
+        )
+        .unwrap();
+
+    assert_eq!(event.resolve_status(), Some(Status::Waiting));
+}
+
+#[test]
+fn cursor_read_pre_tool_use_resolves_to_working() {
+    let event = parse_hook_event(
+            r#"{"event_type":"pre-tool-use","session_id":"conv-1","source":"cursor","tool_call":"Read"}"#,
+        )
+        .unwrap();
+
+    assert_eq!(event.resolve_status(), Some(Status::Working));
+}
+
+#[test]
+fn mislabeled_cursor_shell_event_infers_cursor_tool() {
+    let event = parse_hook_event(
+        r#"{"event_type":"before-shell-execution","session_id":"conv-1","source":"claude"}"#,
     )
     .unwrap();
 
-    // Cursor running a tool (e.g. Bash) is actively working, not waiting.
-    assert_eq!(event.resolve_status(), Some(Status::Working));
+    assert_eq!(event.resolve_tool(), deva_light::types::Tool::Cursor);
+    assert_eq!(event.resolve_status(), Some(Status::Waiting));
 }
 
 #[test]

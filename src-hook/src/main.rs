@@ -44,7 +44,7 @@ fn main() {
         return;
     };
 
-    let source = resolve_source(raw_event_type.as_deref(), &payload);
+    let source = resolve_source(raw_event_type.as_deref(), &event_type, &payload);
     let session_id = resolve_session_id(&payload, &event_type, source);
     let event = HookEvent {
         event_type,
@@ -134,28 +134,30 @@ fn resolve_event_type(argv_event: Option<&str>, payload: &serde_json::Value) -> 
     "unknown".to_string()
 }
 
-fn resolve_source(argv_event: Option<&str>, payload: &serde_json::Value) -> &'static str {
+fn resolve_source(
+    argv_event: Option<&str>,
+    event_type: &str,
+    payload: &serde_json::Value,
+) -> &'static str {
     // Claude hooks pass the normalized event name as argv[1]; Cursor hooks do not.
     if argv_event.filter(|value| !value.is_empty()).is_some() {
         return "claude";
     }
 
-    if payload.get("cursor_version").is_some() {
+    if payload.get("cursor_version").is_some()
+        || payload.get("generation_id").is_some()
+        || payload.get("generationId").is_some()
+        || payload.get("workspace_roots").is_some()
+    {
         return "cursor";
     }
 
-    let has_session = extract_string(payload, &["session_id", "sessionId"]).is_some();
-    let has_conversation =
-        extract_string(payload, &["conversation_id", "conversationId"]).is_some();
+    if event_type_indicates_cursor(event_type) {
+        return "cursor";
+    }
 
-    // Claude always reports session_id (even when it also mirrors conversation_id).
-    // Cursor identifies sessions via conversation_id.
-    if has_session {
+    if event_type_indicates_claude(event_type) {
         return "claude";
-    }
-
-    if has_conversation {
-        return "cursor";
     }
 
     if let Some(name) = extract_string(payload, &["hook_event_name", "event_type", "eventType"]) {
@@ -167,13 +169,65 @@ fn resolve_source(argv_event: Option<&str>, payload: &serde_json::Value) -> &'st
         }
     }
 
+    let has_session = extract_string(payload, &["session_id", "sessionId"]).is_some();
+    let has_conversation =
+        extract_string(payload, &["conversation_id", "conversationId"]).is_some();
+
+    // Cursor may mirror Claude-style session_id; conversation_id wins when both exist.
+    if has_conversation {
+        return "cursor";
+    }
+
+    if has_session {
+        return "claude";
+    }
+
     "claude"
+}
+
+fn event_type_indicates_cursor(event_type: &str) -> bool {
+    matches!(
+        event_type,
+        "before-submit-prompt"
+            | "before-shell-execution"
+            | "after-shell-execution"
+            | "before-mcp-execution"
+            | "after-mcp-execution"
+            | "before-read-file"
+            | "after-file-edit"
+            | "after-agent-response"
+            | "after-agent-thought"
+            | "subagent-start"
+            | "subagent-stop"
+            | "pre-compact"
+            | "post-tool-use-failure"
+    )
+}
+
+fn event_type_indicates_claude(event_type: &str) -> bool {
+    matches!(
+        event_type,
+        "prompt-submit"
+            | "permission-request"
+            | "notification"
+            | "error"
+            | "stream-error"
+            | "connection-error"
+            | "retry-error"
+            | "turn-aborted"
+    )
 }
 
 fn hook_event_name_indicates_cursor_only(name: &str) -> bool {
     matches!(
         name,
         "beforeSubmitPrompt"
+            | "sessionStart"
+            | "sessionEnd"
+            | "stop"
+            | "preToolUse"
+            | "postToolUse"
+            | "postToolUseFailure"
             | "beforeShellExecution"
             | "afterShellExecution"
             | "beforeMCPExecution"
@@ -212,6 +266,31 @@ fn hook_event_name_indicates_claude_only(name: &str) -> bool {
 }
 
 fn resolve_session_id(payload: &serde_json::Value, event_type: &str, source: &str) -> String {
+    let parent_or_conversation = extract_string(
+        payload,
+        &[
+            "parent_conversation_id",
+            "parentConversationId",
+            "conversation_id",
+            "conversationId",
+        ],
+    );
+
+    if extract_string(payload, &["subagent_id", "subagentId"]).is_some()
+        || extract_string(payload, &["generation_id", "generationId"]).is_some()
+    {
+        if let Some(id) = parent_or_conversation {
+            return id;
+        }
+        return "unknown".to_string();
+    }
+
+    if source == "cursor" {
+        if let Some(id) = parent_or_conversation {
+            return id;
+        }
+    }
+
     if matches!(event_type, "subagent-start" | "subagent-stop") {
         if let Some(id) = extract_string(
             payload,
@@ -399,7 +478,10 @@ mod tests {
             "command": "npm test"
         });
 
-        assert_eq!(resolve_source(None, &payload), "cursor");
+        assert_eq!(
+            resolve_source(None, "before-shell-execution", &payload),
+            "cursor"
+        );
         assert_eq!(
             resolve_session_id(&payload, "before-shell-execution", "cursor"),
             "conv-123"
@@ -417,7 +499,10 @@ mod tests {
             "tool_input": { "command": "npm test" }
         });
 
-        assert_eq!(resolve_source(Some("pre-tool-use"), &payload), "claude");
+        assert_eq!(
+            resolve_source(Some("pre-tool-use"), "pre-tool-use", &payload),
+            "claude"
+        );
         assert_eq!(
             resolve_session_id(&payload, "pre-tool-use", "claude"),
             "01J9-claude-session"
@@ -436,7 +521,7 @@ mod tests {
             "prompt": "fix the bug"
         });
 
-        assert_eq!(resolve_source(None, &payload), "claude");
+        assert_eq!(resolve_source(None, "prompt-submit", &payload), "claude");
     }
 
     #[test]
@@ -463,19 +548,18 @@ mod tests {
             "prompt": "fix the bug"
         });
 
-        assert_eq!(resolve_source(None, &payload), "claude");
+        assert_eq!(resolve_source(None, "prompt-submit", &payload), "claude");
     }
 
     #[test]
-    fn claude_camel_case_event_name_without_argv_is_claude() {
+    fn cursor_camel_case_pre_tool_use_is_cursor() {
         let payload = serde_json::json!({
             "session_id": "01J9-claude-session",
             "hook_event_name": "preToolUse",
             "tool_name": "Bash"
         });
 
-        // preToolUse overlaps Cursor naming; session_id wins over event name.
-        assert_eq!(resolve_source(None, &payload), "claude");
+        assert_eq!(resolve_source(None, "pre-tool-use", &payload), "cursor");
     }
 
     #[test]
@@ -486,7 +570,7 @@ mod tests {
             "tool_name": "Bash"
         });
 
-        assert_eq!(resolve_source(None, &payload), "claude");
+        assert_eq!(resolve_source(None, "pre-tool-use", &payload), "claude");
     }
 
     #[test]
@@ -496,7 +580,45 @@ mod tests {
             "command": "npm test"
         });
 
-        assert_eq!(resolve_source(None, &payload), "cursor");
+        assert_eq!(
+            resolve_source(None, "before-shell-execution", &payload),
+            "cursor"
+        );
+    }
+
+    #[test]
+    fn cursor_with_session_and_conversation_is_cursor() {
+        let payload = serde_json::json!({
+            "session_id": "373b8dbf-subagent",
+            "conversation_id": "conv-parent",
+            "hook_event_name": "afterAgentThought"
+        });
+
+        assert_eq!(
+            resolve_source(None, "before-shell-execution", &payload),
+            "cursor"
+        );
+        assert_eq!(
+            resolve_session_id(&payload, "after-agent-thought", "cursor"),
+            "conv-parent"
+        );
+    }
+
+    #[test]
+    fn cursor_subagent_only_payload_is_not_tracked() {
+        let payload = serde_json::json!({
+            "subagent_id": "373b8dbf-aaaa-bbbb-cccc-ddddeeeeffff",
+            "hook_event_name": "afterAgentThought"
+        });
+
+        assert_eq!(
+            resolve_source(None, "before-shell-execution", &payload),
+            "cursor"
+        );
+        assert_eq!(
+            resolve_session_id(&payload, "after-agent-thought", "cursor"),
+            "unknown"
+        );
     }
 
     #[test]
