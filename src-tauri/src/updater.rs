@@ -1,9 +1,10 @@
-use crate::config::load_app_config;
+use crate::config::{apply_configured_proxy_to_env, load_app_config, refresh_config_cache};
 use crate::logging::{log_info, log_warn};
 use serde::Serialize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
+use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_updater::UpdaterExt;
 
 #[derive(Debug, Clone, Serialize)]
@@ -171,6 +172,13 @@ async fn try_silent_update(app: &AppHandle) -> Result<bool, String> {
         ),
     );
 
+    let _ = app
+        .notification()
+        .builder()
+        .title("Deva Light")
+        .body(format!("正在更新到 v{}…", update.version))
+        .show();
+
     update
         .download_and_install(|_chunk_length, _content_length| {}, || {})
         .await
@@ -189,9 +197,12 @@ pub fn spawn_auto_update_service(app: &AppHandle) {
 
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        tokio::time::sleep(std::time::Duration::from_secs(6)).await;
 
         loop {
+            refresh_config_cache();
+            apply_configured_proxy_to_env();
+
             let auto_update_enabled = load_app_config().auto_update_enabled;
 
             if auto_update_enabled {

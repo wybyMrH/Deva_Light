@@ -7,6 +7,9 @@ use crate::cursor_watcher::{discover_cursor_sessions, recent_cursor_session_ids}
 use crate::logging::log_info;
 use crate::types::{Status, Tool};
 use serde::Serialize;
+use std::time::Duration;
+
+const CURSOR_HOOK_ACTIVITY: Duration = Duration::from_secs(15 * 60);
 
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -33,7 +36,11 @@ pub fn refresh_tracked_sessions(aggregator: &StateAggregator) -> RefreshLightsRe
         let is_live = match session.tool {
             Tool::ClaudeCode => live_claude.contains(&session.session_id),
             Tool::Codex => live_codex.contains(&session.session_id),
-            Tool::Cursor => live_cursor.contains(&session.session_id),
+            Tool::Cursor => {
+                live_cursor.contains(&session.session_id)
+                    || aggregator
+                        .session_had_recent_hook_activity(&session.session_id, CURSOR_HOOK_ACTIVITY)
+            }
         };
 
         if !is_live {
@@ -77,10 +84,11 @@ pub fn refresh_tracked_sessions(aggregator: &StateAggregator) -> RefreshLightsRe
         if aggregator.session_status(&session_id).is_some() {
             continue;
         }
-        if claude_session_process_alive(&session_id) == Some(true) {
-            aggregator.add_session(session_id, Tool::ClaudeCode, &cwd, Status::Working);
-            added_sessions += 1;
+        if claude_session_process_alive(&session_id) != Some(true) {
+            continue;
         }
+        aggregator.add_session(session_id, Tool::ClaudeCode, &cwd, Status::Working);
+        added_sessions += 1;
     }
     for (session_id, cwd) in discover_cursor_sessions() {
         if aggregator.session_status(&session_id).is_some() {
@@ -129,20 +137,22 @@ mod tests {
     }
 
     #[test]
-    fn refresh_keeps_error_sessions_without_live_source() {
+    fn refresh_keeps_cursor_session_with_recent_hook_activity() {
         let aggregator = StateAggregator::new();
         aggregator.add_session(
-            "broken".to_string(),
-            Tool::Codex,
+            "cursor-conv-not-on-disk".to_string(),
+            Tool::Cursor,
             Path::new("/tmp/demo"),
-            Status::Error,
+            Status::Working,
         );
+        aggregator.record_hook_activity("cursor-conv-not-on-disk");
 
         let result = refresh_tracked_sessions(&aggregator);
 
         assert_eq!(result.removed_sessions, 0);
-        // Error session is retained; other sessions may be discovered from the
-        // real on-disk state on a developer machine, so assert by id, not count.
-        assert_eq!(aggregator.session_status("broken"), Some(Status::Error));
+        assert_eq!(
+            aggregator.session_status("cursor-conv-not-on-disk"),
+            Some(Status::Working)
+        );
     }
 }

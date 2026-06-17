@@ -2,7 +2,7 @@
 
 use deva_light::aggregator::StateAggregator;
 use deva_light::app_lock::AppLock;
-use deva_light::config::load_app_config;
+use deva_light::config::{apply_configured_proxy_to_env, load_app_config};
 use deva_light::http_server::{existing_instance_is_healthy, HttpServerController};
 use deva_light::logging::{log_error, log_info, log_warn};
 use deva_light::types::Status;
@@ -19,30 +19,6 @@ use tauri::{
 use tauri_plugin_notification::NotificationExt;
 
 mod ipc;
-
-/// Apply the user-configured proxy (from Settings) to the HTTPS_PROXY/HTTP_PROXY
-/// environment variables so reqwest-based clients (news panel) and the updater
-/// honor it. Empty/unset means direct connection; explicit env vars win.
-fn apply_configured_proxy_to_env() {
-    if std::env::var_os("HTTPS_PROXY").is_some()
-        || std::env::var_os("HTTP_PROXY").is_some()
-        || std::env::var_os("ALL_PROXY").is_some()
-    {
-        return;
-    }
-    let config = deva_light::config::load_app_config();
-    let Some(proxy) = config
-        .proxy_url
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return;
-    };
-    std::env::set_var("HTTPS_PROXY", proxy);
-    std::env::set_var("HTTP_PROXY", proxy);
-    log_info("app", format!("applied configured proxy: {proxy}"));
-}
 
 fn main() {
     apply_configured_proxy_to_env();
@@ -310,19 +286,24 @@ fn main() {
                         format!("failed to install bundled hook helper: {error}"),
                     ),
                 }
+
+                // Ensure Cursor hooks exist (idempotent; no-op if Cursor isn't installed).
+                match deva_light::hook_installer::install_cursor_hooks_with_resource_dir(Some(
+                    &resource_dir,
+                )) {
+                    Ok(()) => log_info("app", "Cursor hooks ensured"),
+                    Err(error) => log_warn("app", format!("failed to install Cursor hooks: {error}")),
+                }
             } else {
                 log_warn(
                     "app",
                     "resource directory unavailable; skipped hook helper install",
                 );
-            }
 
-            // Ensure Cursor hooks exist (idempotent; no-op if Cursor isn't installed).
-            // Cursor has no file-based fallback discovery, so hooks are required for
-            // reliable lamp detection.
-            match deva_light::hook_installer::install_cursor_hooks() {
-                Ok(()) => log_info("app", "Cursor hooks ensured"),
-                Err(error) => log_warn("app", format!("failed to install Cursor hooks: {error}")),
+                match deva_light::hook_installer::install_cursor_hooks() {
+                    Ok(()) => log_info("app", "Cursor hooks ensured"),
+                    Err(error) => log_warn("app", format!("failed to install Cursor hooks: {error}")),
+                }
             }
 
             // Refresh WSL hooks on startup to ensure the embedded HTTP port matches

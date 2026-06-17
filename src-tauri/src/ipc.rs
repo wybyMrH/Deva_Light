@@ -2,10 +2,12 @@ use deva_light::aggregator::StateAggregator;
 use deva_light::codex_paths::{codex_session_root_summary, format_paths};
 use deva_light::config::{
     ensure_http_token, get_config_dir, get_config_path, get_lock_path, get_log_path,
-    get_runtime_path, load_app_config, load_runtime_config, save_app_config, DisplayMode,
+    get_runtime_path, load_app_config, load_runtime_config, refresh_config_cache, save_app_config,
+    DisplayMode,
 };
 use deva_light::hook_installer::{
-    check_hooks_installed, install_hooks, preview_hook_config, refresh_wsl_hooks, remove_hooks,
+    check_hooks_installed, install_cursor_hooks_with_resource_dir, install_hooks_with_resource_dir,
+    preview_hook_config, refresh_wsl_hooks, remove_hooks,
 };
 use deva_light::http_server::HttpServerController;
 use deva_light::logging::log_info;
@@ -432,7 +434,15 @@ pub fn prepare_uninstall(keep_config: bool) -> Result<(), String> {
     if !keep_config {
         // Full cleanup - remove everything
         let config_dir = get_config_dir();
-        std::fs::remove_dir_all(&config_dir).map_err(|error| error.to_string())?;
+        if config_dir.exists() {
+            if let Err(error) = std::fs::remove_dir_all(&config_dir) {
+                log_info(
+                    "ipc",
+                    format!("config dir cleanup partially failed: {error}"),
+                );
+            }
+        }
+        refresh_config_cache();
     } else {
         // Keep config.json, remove runtime files
         std::fs::remove_file(get_runtime_path()).ok();
@@ -812,13 +822,21 @@ pub fn check_cursor_hooks() -> bool {
 }
 
 #[tauri::command]
-pub fn install_hooks_command() -> Result<(), String> {
-    install_hooks().map_err(|error| error.to_string())
+pub fn install_hooks_command(app: AppHandle) -> Result<(), String> {
+    let resource_dir = app
+        .path()
+        .resource_dir()
+        .map_err(|error| error.to_string())?;
+    install_hooks_with_resource_dir(Some(&resource_dir)).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-pub fn install_cursor_hooks_command() -> Result<(), String> {
-    deva_light::hook_installer::install_cursor_hooks().map_err(|error| error.to_string())
+pub fn install_cursor_hooks_command(app: AppHandle) -> Result<(), String> {
+    let resource_dir = app
+        .path()
+        .resource_dir()
+        .map_err(|error| error.to_string())?;
+    install_cursor_hooks_with_resource_dir(Some(&resource_dir)).map_err(|error| error.to_string())
 }
 
 #[tauri::command]

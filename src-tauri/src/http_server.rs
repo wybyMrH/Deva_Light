@@ -50,6 +50,12 @@ impl HookEvent {
             return Some(Status::Error);
         }
 
+        // Cursor fires `stop` after each agent turn while the chat stays open.
+        // Treat it as idle between turns; only `session-end` ends the session.
+        if self.source.as_deref() == Some("cursor") && self.event_type == "stop" {
+            return Some(Status::Idle);
+        }
+
         Self::event_type_to_status(&self.event_type)
     }
 
@@ -567,6 +573,8 @@ fn apply_hook_event(aggregator: &StateAggregator, event: HookEvent) {
             aggregator.apply_agent_event(agent_event);
         }
     }
+
+    aggregator.record_hook_activity(&event.session_id);
 }
 
 fn resolve_event_cwd(event: &HookEvent) -> PathBuf {

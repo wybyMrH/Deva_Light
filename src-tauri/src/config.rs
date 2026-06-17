@@ -250,6 +250,30 @@ pub fn get_log_path() -> PathBuf {
     get_config_dir().join("deva-light.log")
 }
 
+/// Apply user-configured proxy to HTTPS_PROXY/HTTP_PROXY for reqwest clients
+/// (news panel, updater). Explicit env vars win; empty config means direct.
+pub fn apply_configured_proxy_to_env() {
+    if std::env::var_os("HTTPS_PROXY").is_some()
+        || std::env::var_os("HTTP_PROXY").is_some()
+        || std::env::var_os("ALL_PROXY").is_some()
+    {
+        return;
+    }
+
+    let config = get_cached_config();
+    let Some(proxy) = config
+        .proxy_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+
+    std::env::set_var("HTTPS_PROXY", proxy);
+    std::env::set_var("HTTP_PROXY", proxy);
+}
+
 fn migrate_legacy_ssh_target(config: &mut AppConfig, value: &serde_json::Value) {
     if !config.remote_ssh_targets.is_empty() {
         return;

@@ -11,6 +11,8 @@ use std::time::{Duration, SystemTime};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
 const REMOVE_INACTIVE_AFTER: Duration = Duration::from_secs(15 * 60);
+/// Short window for cold-start restore only; avoids phantom lamps from old transcripts.
+const RESTORE_RECENT_AFTER: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Debug, Clone)]
 struct TrackedCursorSession {
@@ -64,6 +66,26 @@ fn run_cursor_watcher(aggregator: Arc<StateAggregator>) {
                     if let Some(existing) = tracked.get_mut(&entry.session_id) {
                         existing.last_activity_at = entry.last_activity_at;
                     }
+                    if aggregator.session_status(&entry.session_id).is_none()
+                        && is_recent_cursor_activity(entry.last_activity_at, RESTORE_RECENT_AFTER)
+                    {
+                        if let Some(cwd) = entry.cwd.as_deref() {
+                            log_info(
+                                "cursor_watcher",
+                                format!(
+                                    "re-restored Cursor session {} at {}",
+                                    entry.session_id,
+                                    cwd.display()
+                                ),
+                            );
+                            aggregator.add_session(
+                                entry.session_id.clone(),
+                                Tool::Cursor,
+                                cwd,
+                                Status::Working,
+                            );
+                        }
+                    }
                     continue;
                 }
 
@@ -71,7 +93,7 @@ fn run_cursor_watcher(aggregator: Arc<StateAggregator>) {
                 // when a hook is missing or an event is lost, restore a *very
                 // recent* transcript so a fresh Cursor session still lights up
                 // promptly. Old transcripts are ignored to avoid phantom lamps.
-                if is_recent_cursor_activity(entry.last_activity_at) {
+                if is_recent_cursor_activity(entry.last_activity_at, RESTORE_RECENT_AFTER) {
                     if let Some(cwd) = entry.cwd.as_deref() {
                         log_info(
                             "cursor_watcher",
@@ -118,11 +140,15 @@ fn run_cursor_watcher(aggregator: Arc<StateAggregator>) {
                 .collect();
 
             for session_id in stale_ids {
+                if aggregator.session_had_recent_hook_activity(&session_id, REMOVE_INACTIVE_AFTER) {
+                    continue;
+                }
+
                 if let Some(session) = tracked.remove(&session_id) {
                     log_info(
                         "cursor_watcher",
                         format!(
-                            "Cursor session {} inactive; marking Done",
+                            "Cursor session {} left transcript scan; marking Done",
                             session.session_id
                         ),
                     );
@@ -168,14 +194,15 @@ pub(crate) fn recent_cursor_session_ids() -> HashSet<String> {
 
 /// Only treat a transcript as a live Cursor session if it was written very
 /// recently, so historical transcripts don't create phantom lamps.
-fn is_recent_cursor_activity(time: SystemTime) -> bool {
+fn is_recent_cursor_activity(time: SystemTime, window: Duration) -> bool {
     time.elapsed()
-        .map(|elapsed| elapsed < Duration::from_secs(5 * 60))
+        .map(|elapsed| elapsed < window)
         .unwrap_or(false)
 }
 
 /// Recent Cursor sessions with their decoded working directory, for proactive
-/// discovery. Only very recent transcripts are returned to avoid phantom lamps.
+/// discovery. Uses the same window as refresh/live checks so a manual refresh
+/// can re-light sessions that hooks temporarily missed.
 pub(crate) fn discover_cursor_sessions() -> Vec<(String, PathBuf)> {
     let projects_dir = cursor_projects_dir();
     let Ok(entries) = scan_cursor_sessions(&projects_dir) else {
@@ -184,7 +211,7 @@ pub(crate) fn discover_cursor_sessions() -> Vec<(String, PathBuf)> {
     entries
         .into_iter()
         .filter_map(|entry| {
-            if !is_recent_cursor_activity(entry.last_activity_at) {
+            if !is_recent_cursor_activity(entry.last_activity_at, REMOVE_INACTIVE_AFTER) {
                 return None;
             }
             entry.cwd.map(|cwd| (entry.session_id, cwd))
@@ -247,10 +274,31 @@ fn scan_cursor_sessions(projects_dir: &Path) -> Result<Vec<CursorSessionEntry>, 
 
 fn transcript_jsonl_mtime(session_path: &Path) -> Option<SystemTime> {
     let session_id = session_path.file_name()?.to_str()?;
-    fs::metadata(session_path.join(format!("{session_id}.jsonl")))
-        .ok()?
-        .modified()
-        .ok()
+    let primary = session_path.join(format!("{session_id}.jsonl"));
+    if let Ok(metadata) = fs::metadata(&primary) {
+        if let Ok(modified) = metadata.modified() {
+            return Some(modified);
+        }
+    }
+
+    // Fall back to the newest transcript file in the session directory.
+    let mut latest = None;
+    let Ok(entries) = fs::read_dir(session_path) else {
+        return None;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().is_none_or(|ext| ext != "jsonl") {
+            continue;
+        }
+        if let Ok(modified) = entry.metadata().and_then(|metadata| metadata.modified()) {
+            latest = Some(match latest {
+                Some(existing) if modified <= existing => existing,
+                _ => modified,
+            });
+        }
+    }
+    latest
 }
 
 fn cursor_projects_dir() -> PathBuf {

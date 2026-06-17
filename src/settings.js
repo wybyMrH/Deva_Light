@@ -954,7 +954,7 @@ async function prepareUninstall() {
     setStatus(
       keepConfig
         ? "部分清理完成。现在可以卸载应用。配置文件已保留以便重新安装。"
-        : "完整清理完成。现在可以卸载应用。",
+        : "完整清理完成。请在设置中重新点击「安装 Claude 集成」和「安装 Cursor 集成」，然后重启 Claude Code / Cursor。",
     );
   } catch (error) {
     setStatus(String(error), true);

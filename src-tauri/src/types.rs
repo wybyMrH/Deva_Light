@@ -67,6 +67,9 @@ pub struct SessionRef {
     /// Process ID for alive detection
     #[serde(skip_serializing_if = "Option::is_none")]
     pub process_id: Option<i32>,
+    /// Last hook/HTTP event for this session (not watcher restores).
+    #[serde(skip)]
+    pub last_hook_at: Option<Instant>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -133,7 +136,7 @@ impl LightState {
             matches!(
                 session.status,
                 Status::Working | Status::Waiting | Status::Done | Status::Error
-            )
+            ) || (session.tool == Tool::Cursor && session.status == Status::Idle)
         })
     }
 }

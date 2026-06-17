@@ -82,6 +82,24 @@ fn run_claude_watcher(aggregator: Arc<StateAggregator>) {
                         existing.pid = session.pid;
                         existing.file_name = file_name.clone();
                     }
+                    if aggregator.session_status(&session.session_id).is_none()
+                        && is_process_alive(session.pid)
+                    {
+                        log_info(
+                            "claude_watcher",
+                            format!(
+                                "re-restored Claude session {} (pid={}) at {}",
+                                session.session_id, session.pid, session.cwd
+                            ),
+                        );
+                        let cwd = PathBuf::from(&session.cwd);
+                        aggregator.add_session(
+                            session.session_id.clone(),
+                            Tool::ClaudeCode,
+                            &cwd,
+                            Status::Working,
+                        );
+                    }
                     continue;
                 }
 

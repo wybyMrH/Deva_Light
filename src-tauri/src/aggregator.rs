@@ -88,6 +88,7 @@ impl StateAggregator {
                 pending_action: None,
                 monitor_origin: Some(origin),
                 process_id: None,
+                last_hook_at: None,
             });
             light.last_event_at = Instant::now();
             light.aggregate_status();
@@ -170,6 +171,55 @@ impl StateAggregator {
                 })
             })
             .collect()
+    }
+
+    /// Whether a tracked session received hook/HTTP events recently.
+    pub fn session_had_recent_hook_activity(
+        &self,
+        session_id: &str,
+        within: std::time::Duration,
+    ) -> bool {
+        let state = self.state.read().expect("aggregator state lock poisoned");
+        let Some(light_id) = state.session_to_light.get(session_id) else {
+            return false;
+        };
+        let Some(light) = state.lights.get(light_id) else {
+            return false;
+        };
+
+        light
+            .sessions
+            .iter()
+            .find(|session| session.session_id == session_id)
+            .and_then(|session| session.last_hook_at)
+            .is_some_and(|at| at.elapsed() < within)
+    }
+
+    pub fn record_hook_activity(&self, session_id: &str) {
+        let mut changed = false;
+
+        {
+            let mut state = self.state.write().expect("aggregator state lock poisoned");
+            let Some(light_id) = state.session_to_light.get(session_id).cloned() else {
+                return;
+            };
+
+            if let Some(light) = state.lights.get_mut(&light_id) {
+                if let Some(session) = light
+                    .sessions
+                    .iter_mut()
+                    .find(|session| session.session_id == session_id)
+                {
+                    session.last_hook_at = Some(Instant::now());
+                    light.last_event_at = Instant::now();
+                    changed = true;
+                }
+            }
+        }
+
+        if changed {
+            self.notify_change();
+        }
     }
 
     pub fn remove_session(&self, session_id: &str) {

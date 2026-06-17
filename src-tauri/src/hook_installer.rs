@@ -108,6 +108,28 @@ pub fn install_hook_binary_from_resource(resource_dir: &Path) -> Result<bool, st
     Ok(true)
 }
 
+/// Copy the bundled hook helper into ~/.deva_light/bin when missing or outdated.
+pub fn ensure_hook_binary_installed(resource_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    if get_hook_binary_path().exists() {
+        return Ok(());
+    }
+
+    let copied = install_hook_binary_from_resource(resource_dir)?;
+    if get_hook_binary_path().exists() {
+        return Ok(());
+    }
+
+    if copied {
+        return Err(format!(
+            "hook binary missing after copy attempt at {}",
+            get_hook_binary_path().display()
+        )
+        .into());
+    }
+
+    Err("bundled hook helper not found in app resources".into())
+}
+
 pub fn merge_cursor_hooks(mut existing: Value, hook_path: &Path) -> Result<Value, String> {
     if !existing.is_object() {
         return Err("hooks root must be a JSON object".to_string());
@@ -234,6 +256,22 @@ pub fn install_hooks() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+pub fn install_hooks_with_resource_dir(
+    resource_dir: Option<&Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(resource_dir) = resource_dir {
+        ensure_hook_binary_installed(resource_dir)?;
+    } else if !get_hook_binary_path().exists() {
+        return Err(format!(
+            "hook binary not found: {}",
+            get_hook_binary_path().display()
+        )
+        .into());
+    }
+
+    install_hooks()
+}
+
 pub fn install_claude_hooks() -> Result<(), Box<dyn std::error::Error>> {
     let settings_path = get_claude_settings_path();
     let hook_path = get_hook_binary_path();
@@ -265,6 +303,16 @@ pub fn install_claude_hooks() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 pub fn install_cursor_hooks() -> Result<(), Box<dyn std::error::Error>> {
+    install_cursor_hooks_with_resource_dir(None)
+}
+
+pub fn install_cursor_hooks_with_resource_dir(
+    resource_dir: Option<&Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(resource_dir) = resource_dir {
+        ensure_hook_binary_installed(resource_dir)?;
+    }
+
     let hooks_path = get_cursor_hooks_path();
 
     // No-op when Cursor isn't installed, so startup auto-install is safe for

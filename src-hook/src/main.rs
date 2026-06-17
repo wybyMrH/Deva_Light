@@ -44,8 +44,8 @@ fn main() {
         return;
     };
 
-    let source = resolve_source(&payload);
-    let session_id = resolve_session_id(&payload, &event_type);
+    let source = resolve_source(raw_event_type.as_deref(), &payload);
+    let session_id = resolve_session_id(&payload, &event_type, source);
     let event = HookEvent {
         event_type,
         session_id,
@@ -134,19 +134,84 @@ fn resolve_event_type(argv_event: Option<&str>, payload: &serde_json::Value) -> 
     "unknown".to_string()
 }
 
-fn resolve_source(payload: &serde_json::Value) -> &'static str {
-    if payload.get("hook_event_name").is_some()
-        || payload.get("cursor_version").is_some()
-        || payload.get("conversation_id").is_some()
-        || payload.get("conversationId").is_some()
-    {
-        "cursor"
-    } else {
-        "claude"
+fn resolve_source(argv_event: Option<&str>, payload: &serde_json::Value) -> &'static str {
+    // Claude hooks pass the normalized event name as argv[1]; Cursor hooks do not.
+    if argv_event.filter(|value| !value.is_empty()).is_some() {
+        return "claude";
     }
+
+    if payload.get("cursor_version").is_some() {
+        return "cursor";
+    }
+
+    let has_session = extract_string(payload, &["session_id", "sessionId"]).is_some();
+    let has_conversation =
+        extract_string(payload, &["conversation_id", "conversationId"]).is_some();
+
+    // Claude always reports session_id (even when it also mirrors conversation_id).
+    // Cursor identifies sessions via conversation_id.
+    if has_session {
+        return "claude";
+    }
+
+    if has_conversation {
+        return "cursor";
+    }
+
+    if let Some(name) = extract_string(payload, &["hook_event_name", "event_type", "eventType"]) {
+        if hook_event_name_indicates_claude_only(&name) {
+            return "claude";
+        }
+        if hook_event_name_indicates_cursor_only(&name) {
+            return "cursor";
+        }
+    }
+
+    "claude"
 }
 
-fn resolve_session_id(payload: &serde_json::Value, event_type: &str) -> String {
+fn hook_event_name_indicates_cursor_only(name: &str) -> bool {
+    matches!(
+        name,
+        "beforeSubmitPrompt"
+            | "beforeShellExecution"
+            | "afterShellExecution"
+            | "beforeMCPExecution"
+            | "afterMCPExecution"
+            | "beforeReadFile"
+            | "afterFileEdit"
+            | "afterAgentResponse"
+            | "afterAgentThought"
+            | "subagentStart"
+            | "subagentStop"
+            | "preCompact"
+    )
+}
+
+fn hook_event_name_indicates_claude_only(name: &str) -> bool {
+    matches!(
+        name,
+        "SessionStart"
+            | "SessionEnd"
+            | "UserPromptSubmit"
+            | "PreToolUse"
+            | "PostToolUse"
+            | "PermissionRequest"
+            | "Notification"
+            | "Stop"
+            | "PostToolUseFailure"
+            | "Error"
+            | "StreamError"
+            | "ConnectionError"
+            | "RetryError"
+            | "TurnAborted"
+            // Newer Claude payloads may use camelCase without argv.
+            | "userPromptSubmit"
+            | "permissionRequest"
+    )
+}
+
+fn resolve_session_id(payload: &serde_json::Value, event_type: &str, source: &str) -> String {
     if matches!(event_type, "subagent-start" | "subagent-stop") {
         if let Some(id) = extract_string(
             payload,
@@ -163,16 +228,23 @@ fn resolve_session_id(payload: &serde_json::Value, event_type: &str) -> String {
         }
     }
 
-    extract_string(
-        payload,
+    let id_keys = if source == "cursor" {
         &[
             "conversation_id",
             "conversationId",
             "session_id",
             "sessionId",
-        ],
-    )
-    .unwrap_or_else(|| "unknown".to_string())
+        ][..]
+    } else {
+        &[
+            "session_id",
+            "sessionId",
+            "conversation_id",
+            "conversationId",
+        ][..]
+    };
+
+    extract_string(payload, id_keys).unwrap_or_else(|| "unknown".to_string())
 }
 
 fn resolve_cwd(payload: &serde_json::Value) -> Option<String> {
@@ -327,12 +399,44 @@ mod tests {
             "command": "npm test"
         });
 
-        assert_eq!(resolve_source(&payload), "cursor");
+        assert_eq!(resolve_source(None, &payload), "cursor");
         assert_eq!(
-            resolve_session_id(&payload, "before-shell-execution"),
+            resolve_session_id(&payload, "before-shell-execution", "cursor"),
             "conv-123"
         );
         assert_eq!(resolve_event_type(None, &payload), "before-shell-execution");
+    }
+
+    #[test]
+    fn claude_payload_with_hook_event_name_is_not_cursor() {
+        let payload = serde_json::json!({
+            "session_id": "01J9-claude-session",
+            "cwd": "/home/user/project",
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": { "command": "npm test" }
+        });
+
+        assert_eq!(resolve_source(Some("pre-tool-use"), &payload), "claude");
+        assert_eq!(
+            resolve_session_id(&payload, "pre-tool-use", "claude"),
+            "01J9-claude-session"
+        );
+        assert_eq!(
+            resolve_event_type(Some("pre-tool-use"), &payload),
+            "pre-tool-use"
+        );
+    }
+
+    #[test]
+    fn claude_payload_without_argv_uses_pascal_case_event_name() {
+        let payload = serde_json::json!({
+            "session_id": "01J9-claude-session",
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": "fix the bug"
+        });
+
+        assert_eq!(resolve_source(None, &payload), "claude");
     }
 
     #[test]
@@ -344,9 +448,55 @@ mod tests {
         });
 
         assert_eq!(
-            resolve_session_id(&payload, "subagent-start"),
+            resolve_session_id(&payload, "subagent-start", "cursor"),
             "conv-parent"
         );
+    }
+
+    #[test]
+    fn claude_payload_with_conversation_id_is_not_cursor() {
+        let payload = serde_json::json!({
+            "session_id": "01J9-claude-session",
+            "conversation_id": "01J9-claude-session",
+            "cwd": "/home/user/project",
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": "fix the bug"
+        });
+
+        assert_eq!(resolve_source(None, &payload), "claude");
+    }
+
+    #[test]
+    fn claude_camel_case_event_name_without_argv_is_claude() {
+        let payload = serde_json::json!({
+            "session_id": "01J9-claude-session",
+            "hook_event_name": "preToolUse",
+            "tool_name": "Bash"
+        });
+
+        // preToolUse overlaps Cursor naming; session_id wins over event name.
+        assert_eq!(resolve_source(None, &payload), "claude");
+    }
+
+    #[test]
+    fn hook_event_name_alone_does_not_mark_claude_as_cursor() {
+        let payload = serde_json::json!({
+            "session_id": "01J9-claude-session",
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash"
+        });
+
+        assert_eq!(resolve_source(None, &payload), "claude");
+    }
+
+    #[test]
+    fn cursor_only_event_without_ids_is_cursor() {
+        let payload = serde_json::json!({
+            "hook_event_name": "beforeShellExecution",
+            "command": "npm test"
+        });
+
+        assert_eq!(resolve_source(None, &payload), "cursor");
     }
 
     #[test]

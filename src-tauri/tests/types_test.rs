@@ -45,6 +45,7 @@ fn test_light_state_aggregation() {
         pending_action: None,
         monitor_origin: Some(MonitorOrigin::Local),
         process_id: None,
+        last_hook_at: None,
     });
     light.aggregate_status();
     assert_eq!(light.status, Status::Working);
@@ -60,6 +61,7 @@ fn test_light_state_aggregation() {
         pending_action: None,
         monitor_origin: Some(MonitorOrigin::Local),
         process_id: None,
+        last_hook_at: None,
     });
     light.aggregate_status();
     assert_eq!(light.status, Status::Waiting);
@@ -75,7 +77,35 @@ fn test_light_state_aggregation() {
         pending_action: None,
         monitor_origin: Some(MonitorOrigin::Local),
         process_id: None,
+        last_hook_at: None,
     });
     light.aggregate_status();
     assert_eq!(light.status, Status::Error);
+}
+
+#[test]
+fn cursor_idle_session_keeps_light_visible() {
+    let mut light = LightState::new(
+        "local@@local".to_string(),
+        "/home/user/project".to_string(),
+        "project".to_string(),
+        MonitorOrigin::Local,
+        "local".to_string(),
+        "本地".to_string(),
+    );
+
+    light.sessions.push(SessionRef {
+        session_id: "cursor-1".to_string(),
+        tool: Tool::Cursor,
+        status: Status::Idle,
+        started_at: Instant::now(),
+        task_name: None,
+        error_message: None,
+        pending_action: None,
+        monitor_origin: Some(MonitorOrigin::Local),
+        process_id: None,
+        last_hook_at: None,
+    });
+
+    assert!(light.is_active());
 }
