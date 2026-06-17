@@ -292,7 +292,9 @@ fn main() {
                     &resource_dir,
                 )) {
                     Ok(()) => log_info("app", "Cursor hooks ensured"),
-                    Err(error) => log_warn("app", format!("failed to install Cursor hooks: {error}")),
+                    Err(error) => {
+                        log_warn("app", format!("failed to install Cursor hooks: {error}"))
+                    }
                 }
             } else {
                 log_warn(
@@ -302,7 +304,9 @@ fn main() {
 
                 match deva_light::hook_installer::install_cursor_hooks() {
                     Ok(()) => log_info("app", "Cursor hooks ensured"),
-                    Err(error) => log_warn("app", format!("failed to install Cursor hooks: {error}")),
+                    Err(error) => {
+                        log_warn("app", format!("failed to install Cursor hooks: {error}"))
+                    }
                 }
             }
 
