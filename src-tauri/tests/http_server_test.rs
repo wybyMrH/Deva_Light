@@ -117,7 +117,7 @@ fn infers_cursor_from_after_agent_thought_without_source() {
 }
 
 #[test]
-fn cursor_shell_pre_tool_use_resolves_to_waiting() {
+fn cursor_pre_tool_use_resolves_to_waiting() {
     let event = parse_hook_event(
             r#"{"event_type":"pre-tool-use","session_id":"conv-1","source":"cursor","tool_call":"Shell"}"#,
         )
@@ -127,13 +127,23 @@ fn cursor_shell_pre_tool_use_resolves_to_waiting() {
 }
 
 #[test]
-fn cursor_read_pre_tool_use_resolves_to_working() {
+fn cursor_read_pre_tool_use_also_resolves_to_waiting() {
     let event = parse_hook_event(
             r#"{"event_type":"pre-tool-use","session_id":"conv-1","source":"cursor","tool_call":"Read"}"#,
         )
         .unwrap();
 
-    assert_eq!(event.resolve_status(), Some(Status::Working));
+    assert_eq!(event.resolve_status(), Some(Status::Waiting));
+}
+
+#[test]
+fn cursor_pre_tool_use_without_tool_call_resolves_to_waiting() {
+    let event = parse_hook_event(
+        r#"{"event_type":"pre-tool-use","session_id":"conv-1","source":"cursor"}"#,
+    )
+    .unwrap();
+
+    assert_eq!(event.resolve_status(), Some(Status::Waiting));
 }
 
 #[test]

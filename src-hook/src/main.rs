@@ -3,7 +3,8 @@ use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Deserialize)]
 struct RuntimeConfig {
@@ -55,7 +56,8 @@ fn main() {
         source: Some(source.to_string()),
     };
 
-    match post_event(&target_url, &event) {
+    // Fire-and-forget so Cursor hooks never block the agent on HTTP I/O.
+    thread::spawn(move || match post_event(&target_url, &event) {
         Ok(status) => append_log(format!(
             "sent: event={} session={} source={} target={} via={} status={}",
             event.event_type, event.session_id, source, target_url, target_source, status
@@ -64,7 +66,7 @@ fn main() {
             "failed: event={} session={} source={} target={} via={} error={}",
             event.event_type, event.session_id, source, target_url, target_source, error
         )),
-    }
+    });
 }
 
 fn read_stdin_payload() -> Result<serde_json::Value, String> {
@@ -340,8 +342,20 @@ fn resolve_cwd(payload: &serde_json::Value) -> Option<String> {
 fn resolve_tool_call(payload: &serde_json::Value) -> Option<String> {
     extract_string(
         payload,
-        &["tool_name", "tool", "toolName", "command", "subagent_type"],
+        &[
+            "tool_name",
+            "tool",
+            "toolName",
+            "command",
+            "subagent_type",
+            "name",
+        ],
     )
+    .or_else(|| {
+        payload
+            .get("tool_input")
+            .and_then(|value| extract_string(value, &["command", "cmd", "script"]))
+    })
 }
 
 fn resolve_task_hint(payload: &serde_json::Value) -> Option<String> {
@@ -406,7 +420,10 @@ fn normalize_event_type(event_type: &str) -> String {
 }
 
 fn post_event(url: &str, event: &HookEvent) -> Result<u16, String> {
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+        .map_err(|error| error.to_string())?;
     let mut request = client.post(url).json(event);
 
     if let Ok(token) = env::var("AI_LIGHT_TOKEN") {

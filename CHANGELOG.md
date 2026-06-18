@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.2.2 - 2026-06-17
+
+- 修复 Cursor「Waiting for 1 command to finish / Run in background」不亮黄灯：恢复 v0.1.24 行为，Cursor `preToolUse` 一律映射为 Waiting（黄灯）。
+- 修复 Cursor hook 可能阻塞 Agent：hook 改为后台发送事件（fire-and-forget），HTTP 请求 2 秒超时。
+- 防止 Cursor 轮间 `stop` 事件误清除进行中的黄灯等待状态。
+
 ## v0.2.1 - 2026-06-17
 
 - 修复 Cursor 单任务误显示多条无用会话：subagent/generation UUID 不再单独建灯，transcript 兜底仅恢复 5 分钟内且同项目不重复。

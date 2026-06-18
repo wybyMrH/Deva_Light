@@ -55,10 +55,10 @@ impl HookEvent {
             return Some(Status::Idle);
         }
 
-        if self.resolve_provider() == ProviderId::Cursor
-            && self.event_type == "pre-tool-use"
-            && cursor_pre_tool_use_needs_approval(self)
-        {
+        // Cursor shows approval UI (e.g. "Run in background") after preToolUse;
+        // beforeShellExecution only fires after the user accepts, so mark Waiting
+        // as soon as any tool is proposed — same behavior as v0.1.24.
+        if self.resolve_provider() == ProviderId::Cursor && self.event_type == "pre-tool-use" {
             return Some(Status::Waiting);
         }
 
@@ -210,26 +210,6 @@ fn infer_provider_from_event_type(event_type: &str) -> ProviderId {
         | "pre-compact" => ProviderId::Cursor,
         _ => ProviderId::ClaudeCode,
     }
-}
-
-fn cursor_pre_tool_use_needs_approval(event: &HookEvent) -> bool {
-    let tool = event
-        .tool_call
-        .as_deref()
-        .unwrap_or("")
-        .trim()
-        .to_ascii_lowercase();
-
-    if tool.is_empty() {
-        return false;
-    }
-
-    matches!(
-        tool.as_str(),
-        "shell" | "bash" | "run_terminal_cmd" | "terminal" | "execute" | "command"
-    ) || tool.contains("shell")
-        || tool.contains("terminal")
-        || tool.contains("command")
 }
 
 fn waiting_title(provider: ProviderId, event: &HookEvent) -> String {
@@ -674,6 +654,12 @@ fn should_apply_status_transition(
         return true;
     };
 
+    // Keep yellow while Cursor waits for shell/MCP approval; stop between turns
+    // must not clear an in-flight Waiting state.
+    if current == Status::Waiting && next == Status::Idle && event_type == "stop" {
+        return false;
+    }
+
     if current != Status::Waiting || next != Status::Working {
         return true;
     }
@@ -822,7 +808,7 @@ mod tests {
     }
 
     #[test]
-    fn cursor_shell_pre_tool_use_maps_to_waiting() {
+    fn cursor_pre_tool_use_maps_to_waiting() {
         let event = HookEvent {
             event_type: "pre-tool-use".to_string(),
             session_id: "conv-1".to_string(),
@@ -833,5 +819,29 @@ mod tests {
         };
 
         assert_eq!(event.resolve_status(), Some(Status::Waiting));
+    }
+
+    #[test]
+    fn cursor_pre_tool_use_without_tool_call_maps_to_waiting() {
+        let event = HookEvent {
+            event_type: "pre-tool-use".to_string(),
+            session_id: "conv-1".to_string(),
+            cwd: None,
+            tool_call: None,
+            task_hint: None,
+            source: Some("cursor".to_string()),
+        };
+
+        assert_eq!(event.resolve_status(), Some(Status::Waiting));
+    }
+
+    #[test]
+    fn cursor_stop_does_not_clear_waiting() {
+        assert!(!should_apply_status_transition(
+            Some(Status::Waiting),
+            Status::Idle,
+            "stop",
+            Some("cursor"),
+        ));
     }
 }
