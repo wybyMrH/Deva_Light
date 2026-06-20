@@ -99,7 +99,7 @@ jobs:
         env:
           REF_NAME: ${{ github.ref_name }}
         run: |
-          python <<'PY' >> "$GITHUB_OUTPUT"
+          python <<'PY'
           import os
           from pathlib import Path
 
@@ -137,9 +137,15 @@ jobs:
           else:
               text = footer
 
-          print("body<<EOF")
-          print(text)
-          print("EOF")
+          output_path = Path(os.environ["GITHUB_OUTPUT"])
+          delimiter = "__DEVA_LIGHT_RELEASE_NOTES__"
+
+          with output_path.open("a", encoding="utf-8", newline="\n") as handle:
+              handle.write(f"body<<{delimiter}\n")
+              handle.write(text)
+              if text and not text.endswith("\n"):
+                  handle.write("\n")
+              handle.write(f"{delimiter}\n")
           PY
 
       - name: Build Tauri app
