@@ -2,6 +2,7 @@
 
 use deva_light::aggregator::StateAggregator;
 use deva_light::app_lock::AppLock;
+use deva_light::cache_cleanup;
 use deva_light::config::{apply_configured_proxy_to_env, load_app_config};
 use deva_light::http_server::{existing_instance_is_healthy, HttpServerController};
 use deva_light::logging::{log_error, log_info, log_warn};
@@ -22,6 +23,9 @@ mod ipc;
 
 fn main() {
     apply_configured_proxy_to_env();
+    if let Err(error) = cache_cleanup::cleanup_if_enabled() {
+        log_warn("cache_cleanup", format!("startup cleanup failed: {error}"));
+    }
     log_info("app", "starting Deva Light");
 
     let app_lock = match AppLock::acquire() {
@@ -83,6 +87,7 @@ fn main() {
             ipc::open_settings,
             ipc::hide_settings,
             ipc::open_config_dir,
+            ipc::run_cache_cleanup_command,
             ipc::open_path_in_explorer,
             ipc::resize_main_window,
             ipc::check_hooks,
@@ -271,6 +276,7 @@ fn main() {
             deva_light::claude_watcher::start_claude_watcher(Arc::clone(&aggregator));
             deva_light::cursor_watcher::start_cursor_watcher(Arc::clone(&aggregator));
             start_done_light_cleanup(Arc::clone(&aggregator));
+            start_cache_cleanup_service();
             log_info("app", "watchers started");
 
             window.emit("state-changed", aggregator.get_lights())?;
@@ -287,6 +293,16 @@ fn main() {
                     ),
                 }
 
+                match deva_light::hook_installer::install_claude_hooks_if_available_with_resource_dir(
+                    Some(&resource_dir),
+                ) {
+                    Ok(true) => log_info("app", "Claude hooks ensured"),
+                    Ok(false) => log_info("app", "Claude hooks skipped; Claude Code not detected"),
+                    Err(error) => {
+                        log_warn("app", format!("failed to install Claude hooks: {error}"))
+                    }
+                }
+
                 // Ensure Cursor hooks exist (idempotent; no-op if Cursor isn't installed).
                 match deva_light::hook_installer::install_cursor_hooks_with_resource_dir(Some(
                     &resource_dir,
@@ -301,6 +317,14 @@ fn main() {
                     "app",
                     "resource directory unavailable; skipped hook helper install",
                 );
+
+                match deva_light::hook_installer::install_claude_hooks_if_available() {
+                    Ok(true) => log_info("app", "Claude hooks ensured"),
+                    Ok(false) => log_info("app", "Claude hooks skipped; Claude Code not detected"),
+                    Err(error) => {
+                        log_warn("app", format!("failed to install Claude hooks: {error}"))
+                    }
+                }
 
                 match deva_light::hook_installer::install_cursor_hooks() {
                     Ok(()) => log_info("app", "Cursor hooks ensured"),
@@ -381,5 +405,17 @@ fn start_done_light_cleanup(aggregator: Arc<StateAggregator>) {
     thread::spawn(move || loop {
         thread::sleep(Duration::from_secs(1));
         aggregator.prune_expired_done_lights(ipc::done_light_retention());
+    });
+}
+
+fn start_cache_cleanup_service() {
+    thread::spawn(move || loop {
+        thread::sleep(cache_cleanup::CLEANUP_INTERVAL);
+        if let Err(error) = cache_cleanup::cleanup_if_enabled() {
+            log_warn(
+                "cache_cleanup",
+                format!("scheduled cleanup failed: {error}"),
+            );
+        }
     });
 }

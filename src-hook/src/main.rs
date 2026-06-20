@@ -9,6 +9,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 #[derive(Debug, Deserialize)]
 struct RuntimeConfig {
     http_port: u16,
+    #[serde(default)]
+    http_token: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -37,7 +39,7 @@ fn main() {
         return;
     }
 
-    let Some((target_url, target_source)) = resolve_event_url() else {
+    let Some(target) = resolve_event_target() else {
         append_log(format!(
             "ignored: no target url for event={event_type}; runtime_path={}",
             runtime_config_path().display()
@@ -57,14 +59,14 @@ fn main() {
     };
 
     // Fire-and-forget so Cursor hooks never block the agent on HTTP I/O.
-    thread::spawn(move || match post_event(&target_url, &event) {
+    thread::spawn(move || match post_event(&target, &event) {
         Ok(status) => append_log(format!(
             "sent: event={} session={} source={} target={} via={} status={}",
-            event.event_type, event.session_id, source, target_url, target_source, status
+            event.event_type, event.session_id, source, target.url, target.source, status
         )),
         Err(error) => append_log(format!(
             "failed: event={} session={} source={} target={} via={} error={}",
-            event.event_type, event.session_id, source, target_url, target_source, error
+            event.event_type, event.session_id, source, target.url, target.source, error
         )),
     });
 }
@@ -82,24 +84,49 @@ fn read_stdin_payload() -> Result<serde_json::Value, String> {
     serde_json::from_str(&stdin_content).map_err(|error| error.to_string())
 }
 
-fn resolve_event_url() -> Option<(String, &'static str)> {
+struct EventTarget {
+    url: String,
+    source: &'static str,
+    auth_token: Option<String>,
+}
+
+fn resolve_event_target() -> Option<EventTarget> {
     if let Some(url) = env::var_os("AI_LIGHT_URL").and_then(|value| {
         let value = value.to_string_lossy().trim().to_string();
         (!value.is_empty()).then_some(value)
     }) {
-        return Some((normalize_event_url(&url), "AI_LIGHT_URL"));
+        return Some(EventTarget {
+            url: normalize_event_url(&url),
+            source: "AI_LIGHT_URL",
+            auth_token: resolve_auth_token(None),
+        });
     }
 
     let config = load_runtime_config()?;
-    Some((
-        format!("http://127.0.0.1:{}/events", config.http_port),
-        "runtime.json",
-    ))
+    Some(EventTarget {
+        url: format!("http://127.0.0.1:{}/events", config.http_port),
+        source: "runtime.json",
+        auth_token: resolve_auth_token(Some(&config)),
+    })
 }
 
 fn load_runtime_config() -> Option<RuntimeConfig> {
     let content = fs::read_to_string(runtime_config_path()).ok()?;
     serde_json::from_str(&content).ok()
+}
+
+fn resolve_auth_token(runtime: Option<&RuntimeConfig>) -> Option<String> {
+    env::var("AI_LIGHT_TOKEN")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            runtime
+                .and_then(|config| config.http_token.as_deref())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string)
+        })
 }
 
 fn runtime_config_path() -> PathBuf {
@@ -419,23 +446,39 @@ fn normalize_event_type(event_type: &str) -> String {
     .to_string()
 }
 
-fn post_event(url: &str, event: &HookEvent) -> Result<u16, String> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(2))
-        .build()
-        .map_err(|error| error.to_string())?;
-    let mut request = client.post(url).json(event);
+fn post_event(target: &EventTarget, event: &HookEvent) -> Result<u16, String> {
+    let mut builder = reqwest::blocking::Client::builder().timeout(Duration::from_secs(2));
+    if should_bypass_proxy(&target.url) {
+        builder = builder.no_proxy();
+    }
+    let client = builder.build().map_err(|error| error.to_string())?;
+    let mut request = client.post(&target.url).json(event);
 
-    if let Ok(token) = env::var("AI_LIGHT_TOKEN") {
-        let token = token.trim();
-        if !token.is_empty() {
-            request = request.header("X-Deva-Light-Token", token);
-        }
+    if let Some(token) = target.auth_token.as_deref() {
+        request = request.header("X-Deva-Light-Token", token);
     }
 
     let response = request.send().map_err(|error| error.to_string())?;
+    let status = response.status();
 
-    Ok(response.status().as_u16())
+    if status.is_success() {
+        return Ok(status.as_u16());
+    }
+
+    let body = response
+        .text()
+        .unwrap_or_else(|error| format!("failed to read response body: {error}"));
+    let detail = body.trim();
+
+    if detail.is_empty() {
+        Err(format!("unexpected HTTP status {}", status.as_u16()))
+    } else {
+        Err(format!(
+            "unexpected HTTP status {}: {}",
+            status.as_u16(),
+            detail
+        ))
+    }
 }
 
 fn normalize_event_url(url: &str) -> String {
@@ -444,6 +487,37 @@ fn normalize_event_url(url: &str) -> String {
     } else {
         format!("{}/events", url.trim_end_matches('/'))
     }
+}
+
+fn should_bypass_proxy(url: &str) -> bool {
+    let normalized = url.trim();
+    let host = normalized
+        .split_once("://")
+        .map(|(_, remainder)| remainder)
+        .unwrap_or(normalized)
+        .split('/')
+        .next()
+        .unwrap_or(normalized)
+        .rsplit('@')
+        .next()
+        .unwrap_or(normalized);
+
+    let hostname = if let Some(remainder) = host.strip_prefix('[') {
+        remainder
+            .split_once(']')
+            .map(|(hostname, _)| hostname)
+            .unwrap_or(remainder)
+            .trim()
+    } else {
+        host.split_once(':')
+            .map(|(hostname, _)| hostname)
+            .unwrap_or(host)
+            .trim()
+    };
+
+    hostname.eq_ignore_ascii_case("localhost")
+        || hostname.eq_ignore_ascii_case("127.0.0.1")
+        || hostname.eq_ignore_ascii_case("::1")
 }
 
 fn append_log(message: impl AsRef<str>) {
@@ -474,6 +548,12 @@ fn append_log(message: impl AsRef<str>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     #[test]
     fn normalizes_claude_and_cursor_hook_names() {
@@ -645,5 +725,57 @@ mod tests {
         });
 
         assert_eq!(resolve_cwd(&payload).as_deref(), Some("/home/user/project"));
+    }
+
+    #[test]
+    fn bypasses_proxy_for_local_event_targets() {
+        assert!(should_bypass_proxy("http://127.0.0.1:17321/events"));
+        assert!(should_bypass_proxy("http://localhost:17321/events"));
+        assert!(should_bypass_proxy("http://[::1]:17321/events"));
+        assert!(!should_bypass_proxy("http://192.168.1.8:17321/events"));
+    }
+
+    #[test]
+    fn resolve_auth_token_uses_runtime_token_when_env_missing() {
+        let _guard = env_lock().lock().expect("env lock poisoned");
+        let previous = env::var("AI_LIGHT_TOKEN").ok();
+        env::remove_var("AI_LIGHT_TOKEN");
+
+        let runtime = RuntimeConfig {
+            http_port: 43821,
+            http_token: Some("runtime-secret".to_string()),
+        };
+
+        assert_eq!(
+            resolve_auth_token(Some(&runtime)).as_deref(),
+            Some("runtime-secret")
+        );
+
+        match previous {
+            Some(value) => env::set_var("AI_LIGHT_TOKEN", value),
+            None => env::remove_var("AI_LIGHT_TOKEN"),
+        }
+    }
+
+    #[test]
+    fn resolve_auth_token_prefers_env_over_runtime_token() {
+        let _guard = env_lock().lock().expect("env lock poisoned");
+        let previous = env::var("AI_LIGHT_TOKEN").ok();
+        env::set_var("AI_LIGHT_TOKEN", "env-secret");
+
+        let runtime = RuntimeConfig {
+            http_port: 43821,
+            http_token: Some("runtime-secret".to_string()),
+        };
+
+        assert_eq!(
+            resolve_auth_token(Some(&runtime)).as_deref(),
+            Some("env-secret")
+        );
+
+        match previous {
+            Some(value) => env::set_var("AI_LIGHT_TOKEN", value),
+            None => env::remove_var("AI_LIGHT_TOKEN"),
+        }
     }
 }

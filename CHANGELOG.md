@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.2.3 - 2026-06-20
+
+- 修复 Claude / Cursor 在本机模式下偶发完全检测不到：启动时会自动确保 Claude hooks 与 Cursor hooks，Claude 未安装时保持 no-op，不再只自动装 Cursor。
+- 修复本地 hook 事件被代理或 Windows socket 处理异常吞掉：`src-hook` 对 `127.0.0.1 / localhost / ::1` 强制绕过代理；Windows HTTP 服务对接入连接改回阻塞读写并加超时，避免 `os error 10035` 把 Claude / Cursor 事件打成 502 / 丢失。
+- 修复带 token 的本地事件通道回归：hook 现在会从 `runtime.json` 读取 `http_token`，本地 Claude / Cursor hooks 不再因为缺少 `AI_LIGHT_TOKEN` 而失联。
+- 新增设置项「自动清理 30 天前缓存」：启动时和运行期间定时清理 `~/.deva_light` 中 30 天前的旧日志行、备份文件与临时缓存，并支持手动立即清理，不会误删当前运行时状态文件。
+- 诊断信息细化为独立显示 Claude hooks / Cursor hooks 状态，排查哪条检测链路断了更直接。
+
 ## v0.2.2 - 2026-06-17
 
 - 修复 Cursor「Waiting for 1 command to finish / Run in background」不亮黄灯：恢复 v0.1.24 行为，Cursor `preToolUse` 一律映射为 Waiting（黄灯）。

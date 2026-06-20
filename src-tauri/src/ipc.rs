@@ -1,4 +1,5 @@
 use deva_light::aggregator::StateAggregator;
+use deva_light::cache_cleanup::CacheCleanupReport;
 use deva_light::codex_paths::{codex_session_root_summary, format_paths};
 use deva_light::config::{
     ensure_http_token, get_config_dir, get_config_path, get_lock_path, get_log_path,
@@ -37,6 +38,8 @@ pub struct Diagnostics {
     pub codex_manual_paths: Vec<String>,
     pub codex_missing_paths: Vec<String>,
     pub hooks_installed: bool,
+    pub claude_hooks_installed: bool,
+    pub cursor_hooks_installed: bool,
     pub hook_binary_exists: bool,
     pub runtime_exists: bool,
     pub light_count: usize,
@@ -63,6 +66,7 @@ pub struct AppConfigView {
     pub origin_aliases: Vec<OriginAliasView>,
     pub http_token: Option<String>,
     pub auto_update_enabled: bool,
+    pub auto_cleanup_stale_cache: bool,
     pub news_base_url: Option<String>,
     pub proxy_url: Option<String>,
 }
@@ -107,6 +111,7 @@ pub struct AppConfigUpdate {
     pub origin_aliases: Option<Vec<OriginAliasView>>,
     pub regenerate_http_token: Option<bool>,
     pub auto_update_enabled: Option<bool>,
+    pub auto_cleanup_stale_cache: Option<bool>,
     pub news_base_url: Option<String>,
     pub proxy_url: Option<String>,
 }
@@ -227,6 +232,7 @@ pub fn get_app_config() -> AppConfigView {
         origin_aliases,
         http_token: config.http_token,
         auto_update_enabled: config.auto_update_enabled,
+        auto_cleanup_stale_cache: config.auto_cleanup_stale_cache,
         news_base_url: config.news_base_url,
         proxy_url: config.proxy_url,
     }
@@ -344,6 +350,9 @@ pub fn save_app_config_command(
     if let Some(auto_update_enabled) = update.auto_update_enabled {
         config.auto_update_enabled = auto_update_enabled;
     }
+    if let Some(auto_cleanup_stale_cache) = update.auto_cleanup_stale_cache {
+        config.auto_cleanup_stale_cache = auto_cleanup_stale_cache;
+    }
     if let Some(news_base_url) = update.news_base_url {
         let trimmed = news_base_url.trim();
         config.news_base_url = if trimmed.is_empty() {
@@ -367,6 +376,15 @@ pub fn save_app_config_command(
     }
 
     save_app_config(&config).map_err(|error| error.to_string())?;
+
+    if config.auto_cleanup_stale_cache && !previous.auto_cleanup_stale_cache {
+        if let Err(error) = deva_light::cache_cleanup::cleanup_if_enabled() {
+            log_info(
+                "ipc",
+                format!("enabled stale-cache cleanup but immediate cleanup failed: {error}"),
+            );
+        }
+    }
 
     let network_changed = previous.http_bind != config.http_bind
         || previous.http_port != config.http_port
@@ -483,7 +501,10 @@ pub fn get_diagnostics(aggregator: State<Arc<StateAggregator>>) -> Diagnostics {
             .iter()
             .map(|path| path.to_string_lossy().to_string())
             .collect(),
-        hooks_installed: check_hooks_installed(),
+        hooks_installed: check_hooks_installed()
+            || deva_light::hook_installer::check_cursor_hooks_installed(),
+        claude_hooks_installed: check_hooks_installed(),
+        cursor_hooks_installed: deva_light::hook_installer::check_cursor_hooks_installed(),
         hook_binary_exists: hook_binary_path.exists(),
         runtime_exists: get_runtime_path().exists(),
         light_count: aggregator.get_lights().len(),
@@ -633,6 +654,11 @@ pub fn hide_settings(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub fn open_config_dir() -> Result<(), String> {
     open_path(&get_config_dir().to_string_lossy())
+}
+
+#[tauri::command]
+pub fn run_cache_cleanup_command() -> Result<CacheCleanupReport, String> {
+    deva_light::cache_cleanup::cleanup_now().map_err(|error| error.to_string())
 }
 
 #[tauri::command]

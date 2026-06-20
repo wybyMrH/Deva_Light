@@ -47,7 +47,7 @@ fn run_cursor_watcher(aggregator: Arc<StateAggregator>) {
             let mut seen = HashMap::new();
             let mut transcript_restored_cwds: HashSet<PathBuf> = HashSet::new();
             let mut entries = entries;
-            entries.sort_by(|left, right| right.last_activity_at.cmp(&left.last_activity_at));
+            entries.sort_by_key(|entry| std::cmp::Reverse(entry.last_activity_at));
 
             for entry in entries {
                 seen.insert(entry.session_id.clone(), true);

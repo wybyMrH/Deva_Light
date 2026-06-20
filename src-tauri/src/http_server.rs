@@ -392,6 +392,9 @@ fn run_http_server(
                 let aggregator = Arc::clone(&aggregator);
                 let auth_token = auth_token.clone();
                 thread::spawn(move || {
+                    let _ = stream.set_nonblocking(false);
+                    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+                    let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
                     if let Err(error) = handle_connection(stream, aggregator, auth_token) {
                         log_error(
                             "http_server",

@@ -132,6 +132,8 @@ pub struct AppConfig {
     #[serde(default = "default_auto_update_enabled")]
     pub auto_update_enabled: bool,
     #[serde(default)]
+    pub auto_cleanup_stale_cache: bool,
+    #[serde(default)]
     pub news_base_url: Option<String>,
     #[serde(default)]
     pub proxy_url: Option<String>,
@@ -181,6 +183,7 @@ impl Default for AppConfig {
             origin_aliases: HashMap::new(),
             ssh_discovery_dismissed: Vec::new(),
             auto_update_enabled: true,
+            auto_cleanup_stale_cache: false,
             news_base_url: None,
             proxy_url: None,
         }

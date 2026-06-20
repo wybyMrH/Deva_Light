@@ -26,9 +26,11 @@ const prepareUninstallButton = document.getElementById("prepare-uninstall");
 const refreshDiagnosticsButton = document.getElementById("refresh-diagnostics");
 const copyDiagnosticsButton = document.getElementById("copy-diagnostics");
 const openAppLogButton = document.getElementById("open-app-log");
+const runCacheCleanupButton = document.getElementById("run-cache-cleanup");
 
 const alwaysOnTopCheckbox = document.getElementById("always-on-top");
 const autoDismissDoneCheckbox = document.getElementById("auto-dismiss-done");
+const autoCleanupStaleCacheCheckbox = document.getElementById("auto-cleanup-stale-cache");
 const sshTargetsListEl = document.getElementById("ssh-targets-list");
 const addSshTargetButton = document.getElementById("add-ssh-target");
 const sshDiscoveryBannerEl = document.getElementById("ssh-discovery-banner");
@@ -61,6 +63,7 @@ const updateProgressTextEl = document.getElementById("update-progress-text");
 const autoUpdateCheckbox = document.getElementById("auto-update-enabled");
 const newsBaseUrlInput = document.getElementById("news-base-url");
 const proxyUrlInput = document.getElementById("proxy-url");
+const cacheCleanupStatusEl = document.getElementById("cache-cleanup-status");
 
 const tauriEvent = window.__TAURI__?.event;
 
@@ -146,6 +149,7 @@ prepareUninstallButton.addEventListener("click", prepareUninstall);
 refreshDiagnosticsButton.addEventListener("click", refreshDiagnostics);
 copyDiagnosticsButton.addEventListener("click", copyDiagnostics);
 openAppLogButton.addEventListener("click", openAppLog);
+runCacheCleanupButton?.addEventListener("click", runCacheCleanupNow);
 refreshRemoteButton.addEventListener("click", () => refreshRemoteSetup(true));
 copyInstallCommandButton.addEventListener("click", copyInstallCommand);
 copySshCommandButton.addEventListener("click", copySshCommand);
@@ -265,6 +269,7 @@ async function loadSettings() {
 
   try {
     const config = await invoke("get_app_config");
+    setCacheCleanupStatus("");
     setHttpBind(config.httpBind || "127.0.0.1");
     portInput.value = config.httpPort ?? "";
     const configDir = parentDir(config.configPath);
@@ -275,6 +280,9 @@ async function loadSettings() {
     alwaysOnTopCheckbox.checked = config.alwaysOnTop ?? true;
     setDisplayMode(config.displayMode || "parallel");
     autoDismissDoneCheckbox.checked = config.doneLightAutoDismiss ?? false;
+    if (autoCleanupStaleCacheCheckbox) {
+      autoCleanupStaleCacheCheckbox.checked = config.autoCleanupStaleCache ?? false;
+    }
     if (autoUpdateCheckbox) {
       autoUpdateCheckbox.checked = config.autoUpdateEnabled ?? true;
     }
@@ -332,6 +340,7 @@ async function saveSettings() {
         remoteSshTargets: collectSshTargets(),
         remoteCodexViaSsh: remoteCodexViaSshCheckbox.checked,
         originAliases: parseOriginAliases(),
+        autoCleanupStaleCache: autoCleanupStaleCacheCheckbox?.checked ?? false,
         newsBaseUrl: newsBaseUrlInput ? newsBaseUrlInput.value : "",
         proxyUrl: proxyUrlInput ? proxyUrlInput.value : "",
       },
@@ -355,6 +364,48 @@ async function saveSettings() {
     setStatus(String(error), true);
   } finally {
     setBusy(false);
+  }
+}
+
+async function runCacheCleanupNow() {
+  if (!invoke) return;
+
+  runCacheCleanupButton.disabled = true;
+  setCacheCleanupStatus("正在清理旧缓存…");
+
+  try {
+    const report = await invoke("run_cache_cleanup_command");
+    const changed =
+      (report?.logFilesTrimmed || 0) +
+      (report?.filesRemoved || 0) +
+      (report?.directoriesRemoved || 0) +
+      (report?.logLinesRemoved || 0);
+
+    const message =
+      changed > 0
+        ? `已清理：修剪 ${report.logFilesTrimmed} 个日志文件，删除 ${report.logLinesRemoved} 行旧记录，移除 ${report.filesRemoved} 个过期文件。`
+        : "没有发现超过 30 天的旧缓存。";
+
+    setCacheCleanupStatus(message, true);
+    setStatus(message);
+    await refreshDiagnostics();
+  } catch (error) {
+    const message = String(error);
+    setCacheCleanupStatus(message, false);
+    setStatus(message, true);
+  } finally {
+    runCacheCleanupButton.disabled = false;
+  }
+}
+
+function setCacheCleanupStatus(message, ok) {
+  if (!cacheCleanupStatusEl) return;
+  cacheCleanupStatusEl.textContent = message || "";
+  cacheCleanupStatusEl.classList.remove("ok", "error");
+  if (ok === true) {
+    cacheCleanupStatusEl.classList.add("ok");
+  } else if (ok === false) {
+    cacheCleanupStatusEl.classList.add("error");
   }
 }
 
@@ -1208,6 +1259,8 @@ function diagnosticsText(diagnostics) {
     ...codexMissingPathsList.slice(1).map((path) => `  - ${path}`),
     "",
     `钩子已安装: ${diagnostics.hooksInstalled}`,
+    `Claude hooks: ${diagnostics.claudeHooksInstalled}`,
+    `Cursor hooks: ${diagnostics.cursorHooksInstalled}`,
     `钩子程序存在: ${diagnostics.hookBinaryExists}`,
     `运行时存在: ${diagnostics.runtimeExists}`,
     `灯组数量: ${diagnostics.lightCount}`,

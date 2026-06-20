@@ -336,6 +336,23 @@
           <!-- 高级 -->
           <section class="panel" id="panel-advanced" data-title="高级" data-desc="诊断、日志与卸载">
             <article class="card">
+              <h2>缓存清理</h2>
+              <p class="card-intro">
+                自动清理 <code>~/.deva_light</code> 中 30 天前的旧日志行、备份文件和临时缓存，不影响当前配置、运行时状态和 hook 二进制。
+              </p>
+              <label class="row toggle-row">
+                <span>
+                  <strong>自动清理 30 天前缓存</strong>
+                  <small>启动时自动执行，并在应用运行期间定时复查。</small>
+                </span>
+                <input id="auto-cleanup-stale-cache" type="checkbox" class="switch" />
+              </label>
+              <div class="action-row">
+                <button id="run-cache-cleanup" type="button">立即清理</button>
+              </div>
+              <p id="cache-cleanup-status" class="inline-status"></p>
+            </article>
+            <article class="card">
               <h2>诊断</h2>
               <div class="action-row">
                 <button id="refresh-diagnostics" type="button">刷新诊断</button>

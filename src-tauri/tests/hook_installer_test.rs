@@ -215,6 +215,28 @@ fn hook_binary_current_compares_file_content() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+#[test]
+fn auto_install_claude_hooks_requires_existing_claude_dir_or_settings() {
+    let missing = Path::new("/tmp/deva-light-missing-claude/settings.json");
+    assert!(!claude_hooks_can_auto_install_for_test(missing));
+
+    let existing_file = std::env::temp_dir()
+        .join(unique_name("deva-light-claude-settings"))
+        .join("settings.json");
+    std::fs::create_dir_all(existing_file.parent().unwrap()).unwrap();
+    std::fs::write(&existing_file, "{}").unwrap();
+    assert!(claude_hooks_can_auto_install_for_test(&existing_file));
+    std::fs::remove_file(&existing_file).unwrap();
+    std::fs::remove_dir_all(existing_file.parent().unwrap()).unwrap();
+
+    let existing_parent = std::env::temp_dir()
+        .join(unique_name("deva-light-claude-dir"))
+        .join("settings.json");
+    std::fs::create_dir_all(existing_parent.parent().unwrap()).unwrap();
+    assert!(claude_hooks_can_auto_install_for_test(&existing_parent));
+    std::fs::remove_dir_all(existing_parent.parent().unwrap()).unwrap();
+}
+
 fn unique_name(prefix: &str) -> String {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -222,4 +244,9 @@ fn unique_name(prefix: &str) -> String {
         .as_nanos();
 
     format!("{prefix}-{nanos}")
+}
+
+fn claude_hooks_can_auto_install_for_test(path: &Path) -> bool {
+    let parent_exists = path.parent().is_some_and(|parent| parent.exists());
+    path.exists() || parent_exists
 }

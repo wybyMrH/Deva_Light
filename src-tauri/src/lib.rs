@@ -1,6 +1,7 @@
 pub mod agent_event;
 pub mod aggregator;
 pub mod app_lock;
+pub mod cache_cleanup;
 pub mod claude_watcher;
 pub mod codex_paths;
 pub mod codex_watcher;

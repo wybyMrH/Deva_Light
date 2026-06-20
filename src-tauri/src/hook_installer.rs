@@ -210,6 +210,10 @@ fn quote_command(path: &Path) -> String {
     }
 }
 
+fn claude_hooks_can_auto_install(settings_path: &Path) -> bool {
+    settings_path.exists() || settings_path.parent().is_some_and(|parent| parent.exists())
+}
+
 pub fn merge_hooks(mut existing: Value, hook_path: &Path) -> Result<Value, String> {
     if !existing.is_object() {
         return Err("settings root must be a JSON object".to_string());
@@ -300,6 +304,26 @@ pub fn install_claude_hooks() -> Result<(), Box<dyn std::error::Error>> {
     fs::write(settings_path, serde_json::to_string_pretty(&merged)?)?;
     log_info("hook_installer", "installed Claude hooks");
     Ok(())
+}
+
+pub fn install_claude_hooks_if_available() -> Result<bool, Box<dyn std::error::Error>> {
+    install_claude_hooks_if_available_with_resource_dir(None)
+}
+
+pub fn install_claude_hooks_if_available_with_resource_dir(
+    resource_dir: Option<&Path>,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    if let Some(resource_dir) = resource_dir {
+        ensure_hook_binary_installed(resource_dir)?;
+    }
+
+    let settings_path = get_claude_settings_path();
+    if !claude_hooks_can_auto_install(&settings_path) {
+        return Ok(false);
+    }
+
+    install_claude_hooks()?;
+    Ok(true)
 }
 
 pub fn install_cursor_hooks() -> Result<(), Box<dyn std::error::Error>> {
