@@ -24,3 +24,4 @@ pub mod ssh_setup;
 pub mod types;
 pub mod updater;
 pub mod window_behavior;
+pub mod wsl_paths;

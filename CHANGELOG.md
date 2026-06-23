@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.2.4 - 2026-06-23
+
+- 修复 Windows 上只看到 Codex、Claude/Cursor 失联的问题：hook 事件改为同步发送并记录成功/失败，避免进程退出前后台 POST 被杀掉。
+- 修复 Windows + WSL 混用时 Claude/Cursor 本地扫描漏掉 WSL 会话目录；Windows 版现在同时扫描本机与 WSL 的 Claude sessions / Cursor projects。
+- 修复 WSL 与 Windows 看到同一个 Codex rollout 时重复亮灯：按 session id + 归一化工作目录去重，并把 WSL UNC 的 Windows 挂载路径归一到同一个项目 key。
+- 强化 Codex 等待态识别：`request_user_input`、权限升级、approval/confirmation 字段、顶层 tool call，以及目标模式 `create_goal/update_goal` 都会正确亮黄灯。
+- 强化错误态保持：连接重试、HTTP 4xx/5xx、auth/gateway 等错误继续保持红灯，不再被后续完成/停止事件误当成任务结束。
+
 ## v0.2.3 - 2026-06-20
 
 - 修复 Claude / Cursor 在本机模式下偶发完全检测不到：启动时会自动确保 Claude hooks 与 Cursor hooks，Claude 未安装时保持 no-op，不再只自动装 Cursor。

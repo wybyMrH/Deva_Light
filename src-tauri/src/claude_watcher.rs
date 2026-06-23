@@ -2,10 +2,12 @@ use crate::aggregator::StateAggregator;
 use crate::logging::log_info;
 use crate::monitoring::is_monitoring_paused;
 use crate::types::{Status, Tool};
+#[cfg(target_os = "windows")]
+use crate::wsl_paths::windows_wsl_claude_sessions_dirs;
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -38,10 +40,16 @@ fn run_claude_watcher(aggregator: Arc<StateAggregator>) {
     let mut tracked: HashMap<String, TrackedSession> = HashMap::new();
     let mut previous_session_files: HashMap<String, String> = HashMap::new();
 
-    let sessions_dir = claude_sessions_dir();
     log_info(
         "claude_watcher",
-        format!("scanning Claude sessions at {}", sessions_dir.display()),
+        format!(
+            "scanning Claude sessions at {}",
+            claude_sessions_dirs()
+                .into_iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
     );
 
     loop {
@@ -50,7 +58,7 @@ fn run_claude_watcher(aggregator: Arc<StateAggregator>) {
             continue;
         }
 
-        if let Ok(entries) = scan_session_files(&sessions_dir) {
+        if let Ok(entries) = scan_session_files(&claude_sessions_dirs()) {
             let mut seen_file_names: HashMap<String, bool> = HashMap::new();
             let mut current_session_files: HashMap<String, String> = HashMap::new();
 
@@ -190,6 +198,23 @@ fn claude_sessions_dir() -> PathBuf {
         .join("sessions")
 }
 
+fn claude_sessions_dirs() -> Vec<PathBuf> {
+    #[cfg(not(target_os = "windows"))]
+    let dirs = vec![claude_sessions_dir()];
+
+    #[cfg(target_os = "windows")]
+    let mut dirs = vec![claude_sessions_dir()];
+
+    #[cfg(target_os = "windows")]
+    for path in windows_wsl_claude_sessions_dirs() {
+        if !dirs.iter().any(|existing| existing == &path) {
+            dirs.push(path);
+        }
+    }
+
+    dirs
+}
+
 fn home_dir() -> Option<PathBuf> {
     std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
@@ -197,8 +222,7 @@ fn home_dir() -> Option<PathBuf> {
 }
 
 pub(crate) fn live_claude_session_ids() -> HashSet<String> {
-    let sessions_dir = claude_sessions_dir();
-    let Ok(entries) = scan_session_files(&sessions_dir) else {
+    let Ok(entries) = scan_session_files(&claude_sessions_dirs()) else {
         return HashSet::new();
     };
 
@@ -211,8 +235,7 @@ pub(crate) fn live_claude_session_ids() -> HashSet<String> {
 /// Claude sessions seen on disk with their working directory, for proactive
 /// discovery when the watcher poll or hooks haven't registered a new session.
 pub(crate) fn discover_claude_sessions() -> Vec<(String, PathBuf)> {
-    let sessions_dir = claude_sessions_dir();
-    let Ok(entries) = scan_session_files(&sessions_dir) else {
+    let Ok(entries) = scan_session_files(&claude_sessions_dirs()) else {
         return Vec::new();
     };
     entries
@@ -222,8 +245,7 @@ pub(crate) fn discover_claude_sessions() -> Vec<(String, PathBuf)> {
 }
 
 pub(crate) fn claude_session_process_alive(session_id: &str) -> Option<bool> {
-    let sessions_dir = claude_sessions_dir();
-    let Ok(entries) = scan_session_files(&sessions_dir) else {
+    let Ok(entries) = scan_session_files(&claude_sessions_dirs()) else {
         return None;
     };
 
@@ -233,38 +255,42 @@ pub(crate) fn claude_session_process_alive(session_id: &str) -> Option<bool> {
         .map(|(_file_name, session)| is_process_alive(session.pid))
 }
 
-fn scan_session_files(dir: &Path) -> Result<Vec<(String, ClaudeSessionFile)>, std::io::Error> {
-    if !dir.exists() {
-        return Ok(Vec::new());
-    }
-
+fn scan_session_files(
+    dirs: &[PathBuf],
+) -> Result<Vec<(String, ClaudeSessionFile)>, std::io::Error> {
     let mut results = Vec::new();
 
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-
-        if path.extension().is_none_or(|ext| ext != "json") {
+    for dir in dirs {
+        if !dir.exists() {
             continue;
         }
 
-        let file_name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("")
-            .to_string();
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
 
-        let content = match fs::read_to_string(&path) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
+            if path.extension().is_none_or(|ext| ext != "json") {
+                continue;
+            }
 
-        let session: ClaudeSessionFile = match serde_json::from_str(&content) {
-            Ok(s) => s,
-            Err(_) => continue,
-        };
+            let file_name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
 
-        results.push((file_name, session));
+            let content = match fs::read_to_string(&path) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            let session: ClaudeSessionFile = match serde_json::from_str(&content) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+
+            results.push((file_name, session));
+        }
     }
 
     Ok(results)

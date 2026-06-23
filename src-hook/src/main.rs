@@ -3,7 +3,6 @@ use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
-use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Deserialize)]
@@ -58,8 +57,7 @@ fn main() {
         source: Some(source.to_string()),
     };
 
-    // Fire-and-forget so Cursor hooks never block the agent on HTTP I/O.
-    thread::spawn(move || match post_event(&target, &event) {
+    match post_event(&target, &event) {
         Ok(status) => append_log(format!(
             "sent: event={} session={} source={} target={} via={} status={}",
             event.event_type, event.session_id, source, target.url, target.source, status
@@ -68,7 +66,7 @@ fn main() {
             "failed: event={} session={} source={} target={} via={} error={}",
             event.event_type, event.session_id, source, target.url, target.source, error
         )),
-    });
+    }
 }
 
 fn read_stdin_payload() -> Result<serde_json::Value, String> {

@@ -10,6 +10,7 @@ use crate::config::load_app_config;
 use crate::error_detection::text_looks_like_error;
 use crate::logging::{log_error, log_info, log_warn};
 use crate::monitoring::is_monitoring_paused;
+use crate::project::normalize_path_key;
 use crate::ssh_remote::{is_ssh_virtual_path, read_rollout_from_offset, rollout_modified};
 use crate::types::{Status, Tool};
 use serde_json::Value;
@@ -172,6 +173,7 @@ fn poll_codex_sessions(
         }
     }
 
+    let rollouts = dedupe_rollout_paths(rollouts);
     poll_rollout_paths(aggregator, files, baseline, rollouts)
 }
 
@@ -540,6 +542,11 @@ fn codex_pending_action(
             PendingActionKind::UserQuestion,
             "Codex 等待用户输入，请回到终端处理".to_string(),
         )
+    } else if matches!(tool_name, "create_goal" | "update_goal") {
+        (
+            PendingActionKind::UserQuestion,
+            "Codex 目标模式需要你确认，请回到终端处理".to_string(),
+        )
     } else {
         (
             PendingActionKind::ToolApproval,
@@ -678,6 +685,12 @@ pub fn parse_codex_line(line: &str) -> serde_json::Result<CodexLineEvent> {
                     },
                     None => CodexLineEvent::Status(Status::Waiting),
                 },
+                event_type
+                    if codex_event_type_is_waiting(event_type)
+                        || payload_requires_attention(payload) =>
+                {
+                    CodexLineEvent::Status(Status::Waiting)
+                }
                 event_type if codex_event_type_is_error(event_type) => CodexLineEvent::Error {
                     message: payload_error_message(payload)
                         .or_else(|| Some(event_type.replace('_', "-"))),
@@ -698,25 +711,8 @@ pub fn parse_codex_line(line: &str) -> serde_json::Result<CodexLineEvent> {
                 });
             }
 
-            if matches!(
-                payload_type,
-                "function_call" | "custom_tool_call" | "web_search_call"
-            ) {
-                let tool_call = payload
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .unwrap_or_else(|| {
-                        if payload_type == "web_search_call" {
-                            "web_search"
-                        } else {
-                            "tool"
-                        }
-                    })
-                    .to_string();
-                Ok(CodexLineEvent::ToolCall {
-                    status: status_for_tool_call_payload(&tool_call, payload),
-                    name: tool_call,
-                })
+            if codex_payload_type_is_tool_call(payload_type) {
+                Ok(parse_codex_tool_call(payload_type, payload))
             } else if matches!(
                 payload_type,
                 "function_call_output" | "custom_tool_call_output"
@@ -726,8 +722,59 @@ pub fn parse_codex_line(line: &str) -> serde_json::Result<CodexLineEvent> {
                 Ok(CodexLineEvent::Ignore)
             }
         }
+        "function_call" | "custom_tool_call" | "web_search_call" => {
+            Ok(parse_codex_tool_call(line_type, &value))
+        }
+        "function_call_output" | "custom_tool_call_output" => {
+            Ok(CodexLineEvent::Status(Status::Working))
+        }
         _ => Ok(CodexLineEvent::Ignore),
     }
+}
+
+fn parse_codex_tool_call(payload_type: &str, payload: &Value) -> CodexLineEvent {
+    let tool_call = payload
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| {
+            if payload_type == "web_search_call" {
+                "web_search"
+            } else {
+                "tool"
+            }
+        })
+        .to_string();
+
+    CodexLineEvent::ToolCall {
+        status: status_for_tool_call_payload(&tool_call, payload),
+        name: tool_call,
+    }
+}
+
+fn codex_payload_type_is_tool_call(payload_type: &str) -> bool {
+    matches!(
+        payload_type,
+        "function_call" | "custom_tool_call" | "web_search_call"
+    )
+}
+
+fn codex_event_type_is_waiting(event_type: &str) -> bool {
+    let normalized = event_type.replace('-', "_");
+    matches!(
+        normalized.as_str(),
+        "approval_request"
+            | "approval_requested"
+            | "tool_approval_request"
+            | "permission_request"
+            | "permission_requested"
+            | "confirmation_request"
+            | "confirmation_requested"
+            | "user_input_request"
+            | "input_request"
+            | "agent_waiting"
+            | "waiting_for_user"
+            | "requires_action"
+    )
 }
 
 fn codex_event_type_is_error(event_type: &str) -> bool {
@@ -754,7 +801,12 @@ fn codex_response_item_type_is_error(payload_type: &str) -> bool {
 fn status_for_tool_call_payload(tool_call: &str, payload: &Value) -> Status {
     match tool_call {
         "request_user_input" => Status::Waiting,
-        _ if tool_call_requires_confirmation(payload) => Status::Waiting,
+        "create_goal" | "update_goal" => Status::Waiting,
+        _ if tool_name_requires_attention(tool_call)
+            || tool_call_requires_confirmation(payload) =>
+        {
+            Status::Waiting
+        }
         _ => Status::Working,
     }
 }
@@ -786,18 +838,145 @@ fn payload_error_message(payload: &Value) -> Option<String> {
 }
 
 fn tool_call_requires_confirmation(payload: &Value) -> bool {
-    let Some(arguments) = payload.get("arguments").and_then(Value::as_str) else {
-        return false;
-    };
+    payload_requires_attention(payload)
+        || payload
+            .get("arguments")
+            .is_some_and(arguments_require_attention)
+}
 
-    let Ok(value) = serde_json::from_str::<Value>(arguments) else {
-        return false;
-    };
+fn tool_name_requires_attention(tool_call: &str) -> bool {
+    let normalized = tool_call.replace('-', "_");
+    normalized.contains("approval")
+        || normalized.contains("permission")
+        || normalized.contains("confirmation")
+        || normalized.contains("user_input")
+}
 
-    value
-        .get("sandbox_permissions")
-        .and_then(Value::as_str)
-        .is_some_and(|value| value == "require_escalated")
+fn arguments_require_attention(arguments: &Value) -> bool {
+    match arguments {
+        Value::String(text) => serde_json::from_str::<Value>(text)
+            .map(|value| payload_requires_attention(&value))
+            .unwrap_or_else(|_| attention_text_looks_explicit(text)),
+        Value::Object(_) => payload_requires_attention(arguments),
+        _ => false,
+    }
+}
+
+fn payload_requires_attention(payload: &Value) -> bool {
+    match payload {
+        Value::Object(map) => map.iter().any(|(key, value)| {
+            attention_key_value_requires_attention(key, value)
+                || match value {
+                    Value::Object(_) => payload_requires_attention(value),
+                    Value::Array(values) => values.iter().any(payload_requires_attention),
+                    _ => false,
+                }
+        }),
+        Value::Array(values) => values.iter().any(payload_requires_attention),
+        _ => false,
+    }
+}
+
+fn attention_key_value_requires_attention(key: &str, value: &Value) -> bool {
+    let normalized_key = key.replace('-', "_").to_ascii_lowercase();
+
+    if matches!(
+        normalized_key.as_str(),
+        "requires_approval"
+            | "requires_confirmation"
+            | "approval_required"
+            | "confirmation_required"
+            | "needs_approval"
+            | "needs_confirmation"
+            | "requires_user_input"
+            | "user_input_required"
+            | "wait_for_user"
+            | "waiting_for_user"
+    ) {
+        return value_truthy(value);
+    }
+
+    if normalized_key == "sandbox_permissions" {
+        return value
+            .as_str()
+            .map(attention_string_requires_attention)
+            .unwrap_or(false);
+    }
+
+    if matches!(
+        normalized_key.as_str(),
+        "approval"
+            | "approval_status"
+            | "approval_state"
+            | "confirmation"
+            | "confirmation_status"
+            | "confirmation_state"
+            | "permission"
+            | "permission_status"
+            | "permission_state"
+            | "status"
+            | "state"
+    ) {
+        return value_attention_state(value);
+    }
+
+    false
+}
+
+fn value_truthy(value: &Value) -> bool {
+    match value {
+        Value::Bool(value) => *value,
+        Value::String(value) => !matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "" | "false" | "no" | "0" | "none" | "never" | "not_required"
+        ),
+        Value::Number(value) => value.as_i64().is_some_and(|value| value != 0),
+        _ => false,
+    }
+}
+
+fn value_attention_state(value: &Value) -> bool {
+    match value {
+        Value::Bool(value) => *value,
+        Value::String(value) => attention_string_requires_attention(value),
+        Value::Object(_) | Value::Array(_) => payload_requires_attention(value),
+        _ => false,
+    }
+}
+
+fn attention_string_requires_attention(value: &str) -> bool {
+    matches!(
+        value.trim().replace('-', "_").to_ascii_lowercase().as_str(),
+        "require_escalated"
+            | "requires_approval"
+            | "require_approval"
+            | "approval_required"
+            | "needs_approval"
+            | "requires_confirmation"
+            | "require_confirmation"
+            | "confirmation_required"
+            | "needs_confirmation"
+            | "requires_user_input"
+            | "user_input_required"
+            | "on_request"
+            | "untrusted"
+            | "pending"
+            | "requested"
+            | "waiting"
+            | "waiting_for_user"
+            | "requires_action"
+    )
+}
+
+fn attention_text_looks_explicit(text: &str) -> bool {
+    let normalized = text.replace(['-', ' '], "_").to_ascii_lowercase();
+    (normalized.contains("sandbox_permissions") && normalized.contains("require_escalated"))
+        || normalized.contains("requires_approval")
+        || normalized.contains("approval_required")
+        || normalized.contains("requires_confirmation")
+        || normalized.contains("confirmation_required")
+        || normalized.contains("requires_user_input")
+        || normalized.contains("user_input_required")
 }
 
 fn rollout_modified_at(path: &Path) -> io::Result<SystemTime> {
@@ -937,6 +1116,91 @@ fn session_id_from_rollout_content(content: &str) -> Option<String> {
     }
 
     None
+}
+
+fn dedupe_rollout_paths(mut rollouts: Vec<PathBuf>) -> Vec<PathBuf> {
+    rollouts.sort();
+    let mut kept = Vec::new();
+    let mut by_key: HashMap<String, PathBuf> = HashMap::new();
+
+    for path in rollouts {
+        let Some(key) = rollout_dedupe_key(&path) else {
+            kept.push(path);
+            continue;
+        };
+
+        match by_key.get(&key) {
+            Some(existing)
+                if rollout_path_preference(existing) <= rollout_path_preference(&path) => {}
+            Some(existing) => {
+                if let Some(position) = kept.iter().position(|candidate| candidate == existing) {
+                    kept[position] = path.clone();
+                }
+                by_key.insert(key, path);
+            }
+            None => {
+                by_key.insert(key, path.clone());
+                kept.push(path);
+            }
+        }
+    }
+
+    kept
+}
+
+fn rollout_dedupe_key(path: &Path) -> Option<String> {
+    let session_id = read_rollout_session_id(path)?;
+    let cwd_key = read_rollout_cwd_key(path)?;
+    Some(format!("{session_id}@@{cwd_key}"))
+}
+
+fn read_rollout_cwd_key(path: &Path) -> Option<String> {
+    if is_ssh_virtual_path(path) {
+        let (content, _) = read_rollout_from_offset(path, 0).ok()?;
+        return cwd_key_from_rollout_content(&content);
+    }
+
+    let file = File::open(path).ok()?;
+    let mut reader = BufReader::new(file);
+    let mut line = String::new();
+
+    for _ in 0..32 {
+        line.clear();
+        let bytes = reader.read_line(&mut line).ok()?;
+        if bytes == 0 {
+            break;
+        }
+
+        if let Ok(CodexLineEvent::SessionMeta(meta)) = parse_codex_line(line.trim_end()) {
+            return Some(normalize_path_key(&meta.cwd.to_string_lossy()));
+        }
+    }
+
+    None
+}
+
+fn cwd_key_from_rollout_content(content: &str) -> Option<String> {
+    for line in content.lines().take(32) {
+        if let Ok(CodexLineEvent::SessionMeta(meta)) = parse_codex_line(line) {
+            return Some(normalize_path_key(&meta.cwd.to_string_lossy()));
+        }
+    }
+
+    None
+}
+
+fn rollout_path_preference(path: &Path) -> (u8, usize, usize) {
+    let origin_rank = if is_ssh_virtual_path(path) {
+        2
+    } else if is_wsl_unc_path(path) {
+        1
+    } else {
+        0
+    };
+
+    let depth = path.components().count();
+    let len = path.to_string_lossy().len();
+    (origin_rank, depth, len)
 }
 
 fn find_rollout_files(
@@ -1165,12 +1429,83 @@ mod tests {
 
         assert_eq!(
             parse_codex_line(
+                r#"{"type":"function_call","name":"request_user_input","arguments":"{}"}"#,
+            )
+            .unwrap(),
+            CodexLineEvent::ToolCall {
+                name: "request_user_input".to_string(),
+                status: Status::Waiting,
+            }
+        );
+
+        assert_eq!(
+            parse_codex_line(
                 r#"{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"date\",\"sandbox_permissions\":\"require_escalated\",\"justification\":\"confirm\"}"}}"#,
             )
             .unwrap(),
             CodexLineEvent::ToolCall {
                 name: "exec_command".to_string(),
                 status: Status::Waiting,
+            }
+        );
+
+        assert_eq!(
+            parse_codex_line(
+                r#"{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":{"cmd":"date","requires_approval":true}}}"#,
+            )
+            .unwrap(),
+            CodexLineEvent::ToolCall {
+                name: "exec_command".to_string(),
+                status: Status::Waiting,
+            }
+        );
+
+        assert_eq!(
+            parse_codex_line(
+                r#"{"type":"response_item","payload":{"type":"function_call","name":"exec_command","requires_confirmation":true,"arguments":"{\"cmd\":\"date\"}"}}"#,
+            )
+            .unwrap(),
+            CodexLineEvent::ToolCall {
+                name: "exec_command".to_string(),
+                status: Status::Waiting,
+            }
+        );
+
+        assert_eq!(
+            parse_codex_line(
+                r#"{"type":"event_msg","payload":{"type":"approval_request","message":"Approve command?"}}"#,
+            )
+            .unwrap(),
+            CodexLineEvent::Status(Status::Waiting)
+        );
+
+        assert_eq!(
+            parse_codex_line(
+                r#"{"type":"event_msg","payload":{"type":"status","state":"waiting_for_user"}}"#,
+            )
+            .unwrap(),
+            CodexLineEvent::Status(Status::Waiting)
+        );
+
+        assert_eq!(
+            parse_codex_line(
+                r#"{"type":"response_item","payload":{"type":"function_call","name":"create_goal","arguments":"{\"objective\":\"ship release\"}"}}"#,
+            )
+            .unwrap(),
+            CodexLineEvent::ToolCall {
+                name: "create_goal".to_string(),
+                status: Status::Waiting,
+            }
+        );
+
+        assert_eq!(
+            parse_codex_line(
+                r#"{"type":"response_item","payload":{"type":"function_call","name":"get_goal","arguments":"{}"}}"#,
+            )
+            .unwrap(),
+            CodexLineEvent::ToolCall {
+                name: "get_goal".to_string(),
+                status: Status::Working,
             }
         );
 
@@ -1383,6 +1718,63 @@ mod tests {
                 .map(|action| action.kind),
             Some(PendingActionKind::UserQuestion)
         );
+
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn codex_goal_mode_tool_call_marks_session_waiting_until_output() {
+        let root = std::env::temp_dir().join(unique_name("ai-light-codex-root"));
+        let project = std::env::temp_dir().join(unique_name("ai-light-codex-project"));
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&project).unwrap();
+
+        let rollout = root.join("rollout-2026-05-31T00-00-00-s1.jsonl");
+        let initial = format!(
+            "{}\n{}\n",
+            json_line(
+                "session_meta",
+                &format!(r#"{{"id":"s1","cwd":"{}"}}"#, json_path(&project))
+            ),
+            json_line(
+                "response_item",
+                r#"{"type":"function_call","name":"create_goal","arguments":"{\"objective\":\"ship release\"}"}"#
+            )
+        );
+        fs::write(&rollout, &initial).unwrap();
+
+        let aggregator = StateAggregator::new();
+        let mut files = HashMap::new();
+        poll_rollout_root(&aggregator, &mut files, false, &root).unwrap();
+
+        let lights = aggregator.get_lights();
+        assert_eq!(lights.len(), 1);
+        assert_eq!(lights[0].status, Status::Waiting);
+        assert_eq!(lights[0].last_tool_call.as_deref(), Some("create_goal"));
+        assert_eq!(
+            lights[0].sessions[0]
+                .pending_action
+                .as_ref()
+                .map(|action| action.kind),
+            Some(PendingActionKind::UserQuestion)
+        );
+
+        fs::write(
+            &rollout,
+            format!(
+                "{}{}\n",
+                initial,
+                json_line(
+                    "response_item",
+                    r#"{"type":"function_call_output","call_id":"call_goal","output":"ok"}"#
+                )
+            ),
+        )
+        .unwrap();
+
+        poll_rollout_root(&aggregator, &mut files, false, &root).unwrap();
+        assert_eq!(aggregator.get_lights()[0].status, Status::Working);
 
         let _ = fs::remove_dir_all(root);
         let _ = fs::remove_dir_all(project);
@@ -1699,6 +2091,50 @@ mod tests {
         let _ = fs::remove_dir_all(second_root);
         let _ = fs::remove_dir_all(first_project);
         let _ = fs::remove_dir_all(second_project);
+    }
+
+    #[test]
+    fn dedupes_same_rollout_seen_via_windows_and_wsl_paths() {
+        let root = std::env::temp_dir().join(unique_name("ai-light-codex-root"));
+        let project = std::env::temp_dir().join(unique_name("ai-light-codex-project"));
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&project).unwrap();
+
+        let windows_rollout = root.join("rollout-2026-05-31T00-00-00-s1.jsonl");
+        let mirrored_rollout = root
+            .join("nested")
+            .join("rollout-2026-05-31T00-00-00-s1.jsonl");
+        fs::create_dir_all(mirrored_rollout.parent().unwrap()).unwrap();
+        fs::write(
+            &windows_rollout,
+            format!(
+                "{}\n{}\n",
+                json_line(
+                    "session_meta",
+                    &format!(r#"{{"id":"s1","cwd":"{}"}}"#, json_path(&project))
+                ),
+                json_line("event_msg", r#"{"type":"task_started"}"#)
+            ),
+        )
+        .unwrap();
+        fs::write(
+            &mirrored_rollout,
+            format!(
+                "{}\n{}\n",
+                json_line(
+                    "session_meta",
+                    &format!(r#"{{"id":"s1","cwd":"{}"}}"#, json_path(&project))
+                ),
+                json_line("event_msg", r#"{"type":"task_started"}"#)
+            ),
+        )
+        .unwrap();
+
+        let deduped = dedupe_rollout_paths(vec![mirrored_rollout, windows_rollout.clone()]);
+        assert_eq!(deduped, vec![windows_rollout]);
+
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(project);
     }
 
     #[test]

@@ -2,6 +2,8 @@ use crate::aggregator::StateAggregator;
 use crate::logging::log_info;
 use crate::monitoring::is_monitoring_paused;
 use crate::types::{Status, Tool};
+#[cfg(target_os = "windows")]
+use crate::wsl_paths::windows_wsl_cursor_projects_dirs;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -28,10 +30,16 @@ pub fn start_cursor_watcher(aggregator: Arc<StateAggregator>) {
 }
 
 fn run_cursor_watcher(aggregator: Arc<StateAggregator>) {
-    let projects_dir = cursor_projects_dir();
     log_info(
         "cursor_watcher",
-        format!("scanning Cursor projects at {}", projects_dir.display()),
+        format!(
+            "scanning Cursor projects at {}",
+            cursor_projects_dirs()
+                .into_iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
     );
 
     let mut tracked: HashMap<String, TrackedCursorSession> = HashMap::new();
@@ -42,7 +50,7 @@ fn run_cursor_watcher(aggregator: Arc<StateAggregator>) {
             continue;
         }
 
-        if let Ok(entries) = scan_cursor_sessions(&projects_dir) {
+        if let Ok(entries) = scan_cursor_sessions(&cursor_projects_dirs()) {
             let now = SystemTime::now();
             let mut seen = HashMap::new();
             let mut transcript_restored_cwds: HashSet<PathBuf> = HashSet::new();
@@ -180,8 +188,7 @@ struct CursorSessionEntry {
 }
 
 pub(crate) fn recent_cursor_session_ids() -> HashSet<String> {
-    let projects_dir = cursor_projects_dir();
-    let Ok(entries) = scan_cursor_sessions(&projects_dir) else {
+    let Ok(entries) = scan_cursor_sessions(&cursor_projects_dirs()) else {
         return HashSet::new();
     };
 
@@ -237,8 +244,7 @@ fn should_restore_from_transcript(
 /// discovery. Uses the same window as refresh/live checks so a manual refresh
 /// can re-light sessions that hooks temporarily missed.
 pub(crate) fn discover_cursor_sessions() -> Vec<(String, PathBuf)> {
-    let projects_dir = cursor_projects_dir();
-    let Ok(entries) = scan_cursor_sessions(&projects_dir) else {
+    let Ok(entries) = scan_cursor_sessions(&cursor_projects_dirs()) else {
         return Vec::new();
     };
     entries
@@ -252,53 +258,58 @@ pub(crate) fn discover_cursor_sessions() -> Vec<(String, PathBuf)> {
         .collect()
 }
 
-fn scan_cursor_sessions(projects_dir: &Path) -> Result<Vec<CursorSessionEntry>, std::io::Error> {
-    if !projects_dir.exists() {
-        return Ok(Vec::new());
-    }
-
+fn scan_cursor_sessions(
+    projects_dirs: &[PathBuf],
+) -> Result<Vec<CursorSessionEntry>, std::io::Error> {
     let mut results = Vec::new();
 
-    for project_entry in fs::read_dir(projects_dir)? {
-        let project_entry = project_entry?;
-        let project_path = project_entry.path();
-        if !project_path.is_dir() {
+    for projects_dir in projects_dirs {
+        if !projects_dir.exists() {
             continue;
         }
 
-        let Some(cwd) = project_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .and_then(decode_cursor_project_slug)
-        else {
-            continue;
-        };
-
-        let transcripts_dir = project_path.join("agent-transcripts");
-        if !transcripts_dir.exists() {
-            continue;
-        }
-
-        for session_entry in fs::read_dir(&transcripts_dir)? {
-            let session_entry = session_entry?;
-            let session_path = session_entry.path();
-            if !session_path.is_dir() {
+        for project_entry in fs::read_dir(projects_dir)? {
+            let project_entry = project_entry?;
+            let project_path = project_entry.path();
+            if !project_path.is_dir() {
                 continue;
             }
 
-            let Some(session_id) = session_path.file_name().and_then(|name| name.to_str()) else {
+            let Some(cwd) = project_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .and_then(decode_cursor_project_slug)
+            else {
                 continue;
             };
 
-            let Some(last_activity_at) = transcript_jsonl_mtime(&session_path) else {
+            let transcripts_dir = project_path.join("agent-transcripts");
+            if !transcripts_dir.exists() {
                 continue;
-            };
+            }
 
-            results.push(CursorSessionEntry {
-                session_id: session_id.to_string(),
-                last_activity_at,
-                cwd: Some(cwd.clone()),
-            });
+            for session_entry in fs::read_dir(&transcripts_dir)? {
+                let session_entry = session_entry?;
+                let session_path = session_entry.path();
+                if !session_path.is_dir() {
+                    continue;
+                }
+
+                let Some(session_id) = session_path.file_name().and_then(|name| name.to_str())
+                else {
+                    continue;
+                };
+
+                let Some(last_activity_at) = transcript_jsonl_mtime(&session_path) else {
+                    continue;
+                };
+
+                results.push(CursorSessionEntry {
+                    session_id: session_id.to_string(),
+                    last_activity_at,
+                    cwd: Some(cwd.clone()),
+                });
+            }
         }
     }
 
@@ -339,6 +350,23 @@ fn cursor_projects_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".cursor")
         .join("projects")
+}
+
+fn cursor_projects_dirs() -> Vec<PathBuf> {
+    #[cfg(not(target_os = "windows"))]
+    let dirs = vec![cursor_projects_dir()];
+
+    #[cfg(target_os = "windows")]
+    let mut dirs = vec![cursor_projects_dir()];
+
+    #[cfg(target_os = "windows")]
+    for path in windows_wsl_cursor_projects_dirs() {
+        if !dirs.iter().any(|existing| existing == &path) {
+            dirs.push(path);
+        }
+    }
+
+    dirs
 }
 
 fn home_dir() -> Option<PathBuf> {

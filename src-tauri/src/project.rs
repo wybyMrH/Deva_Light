@@ -57,10 +57,29 @@ pub fn normalize_path_key(path: &str) -> String {
             .split('/')
             .filter(|part| !part.is_empty())
             .collect();
-        if segments.len() >= 3 {
-            let distro = segments[2].to_lowercase();
-            let tail = segments[3..].join("/").to_lowercase();
-            normalized = format!("wsl://{distro}/{tail}");
+        if segments.len() >= 2 {
+            let distro = segments[1].to_lowercase();
+            let tail_segments = &segments[2..];
+            if tail_segments.len() >= 2
+                && tail_segments[0].eq_ignore_ascii_case("mnt")
+                && tail_segments[1].len() == 1
+                && tail_segments[1].chars().all(|ch| ch.is_ascii_alphabetic())
+            {
+                let drive = tail_segments[1].to_ascii_lowercase();
+                let tail = tail_segments[2..].join("/").to_lowercase();
+                normalized = if tail.is_empty() {
+                    format!("{drive}:/")
+                } else {
+                    format!("{drive}:/{tail}")
+                };
+            } else {
+                let tail = tail_segments.join("/").to_lowercase();
+                normalized = if tail.is_empty() {
+                    format!("wsl://{distro}")
+                } else {
+                    format!("wsl://{distro}/{tail}")
+                };
+            }
         }
     } else if normalized.len() >= 2 && normalized.as_bytes()[1] == b':' {
         normalized = normalized.to_lowercase();
@@ -249,6 +268,14 @@ mod tests {
         assert_eq!(
             normalize_path_key("/mnt/c/Users/alice/projects/demo"),
             normalize_path_key(r"C:\Users\alice\projects\demo")
+        );
+    }
+
+    #[test]
+    fn normalizes_wsl_unc_windows_mount_to_same_key() {
+        assert_eq!(
+            normalize_path_key("//wsl.localhost/Ubuntu/mnt/e/code/Python/AI_Light"),
+            normalize_path_key(r"E:\code\Python\AI_Light")
         );
     }
 
