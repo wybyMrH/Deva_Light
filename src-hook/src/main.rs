@@ -254,11 +254,14 @@ fn hook_event_name_indicates_cursor_only(name: &str) -> bool {
             | "stop"
             | "preToolUse"
             | "postToolUse"
+            | "afterToolUse"
             | "postToolUseFailure"
             | "beforeShellExecution"
             | "afterShellExecution"
             | "beforeMCPExecution"
+            | "beforeMcpExecution"
             | "afterMCPExecution"
+            | "afterMcpExecution"
             | "beforeReadFile"
             | "afterFileEdit"
             | "afterAgentResponse"
@@ -289,6 +292,7 @@ fn hook_event_name_indicates_claude_only(name: &str) -> bool {
             // Newer Claude payloads may use camelCase without argv.
             | "userPromptSubmit"
             | "permissionRequest"
+            | "notification"
     )
 }
 
@@ -412,9 +416,8 @@ fn normalize_event_type(event_type: &str) -> String {
         "PermissionRequest" | "permission_request" | "permission-request" | "permissionrequest" => {
             "permission-request"
         }
-        "PostToolUse" | "post_tool_use" | "post-tool-use" | "posttooluse" | "postToolUse" => {
-            "post-tool-use"
-        }
+        "PostToolUse" | "post_tool_use" | "post-tool-use" | "posttooluse" | "postToolUse"
+        | "afterToolUse" => "post-tool-use",
         "Notification" | "notification" => "notification",
         "Stop" | "stop" => "stop",
         "SessionEnd" | "session_end" | "sessionend" | "sessionEnd" => "session-end",
@@ -430,8 +433,10 @@ fn normalize_event_type(event_type: &str) -> String {
         "postToolUseFailure" | "post-tool-use-failure" => "post-tool-use-failure",
         "beforeShellExecution" | "before-shell-execution" => "before-shell-execution",
         "afterShellExecution" | "after-shell-execution" => "after-shell-execution",
-        "beforeMCPExecution" | "before-mcp-execution" => "before-mcp-execution",
-        "afterMCPExecution" | "after-mcp-execution" => "after-mcp-execution",
+        "beforeMCPExecution" | "beforeMcpExecution" | "before-mcp-execution" => {
+            "before-mcp-execution"
+        }
+        "afterMCPExecution" | "afterMcpExecution" | "after-mcp-execution" => "after-mcp-execution",
         "beforeReadFile" | "before-read-file" => "before-read-file",
         "afterFileEdit" | "after-file-edit" => "after-file-edit",
         "afterAgentResponse" | "after-agent-response" => "after-agent-response",
@@ -558,9 +563,14 @@ mod tests {
         assert_eq!(normalize_event_type("SessionStart"), "session-start");
         assert_eq!(normalize_event_type("sessionStart"), "session-start");
         assert_eq!(normalize_event_type("preToolUse"), "pre-tool-use");
+        assert_eq!(normalize_event_type("afterToolUse"), "post-tool-use");
         assert_eq!(
             normalize_event_type("beforeShellExecution"),
             "before-shell-execution"
+        );
+        assert_eq!(
+            normalize_event_type("beforeMcpExecution"),
+            "before-mcp-execution"
         );
         assert_eq!(normalize_event_type("subagentStart"), "subagent-start");
     }

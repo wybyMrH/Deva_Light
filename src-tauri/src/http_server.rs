@@ -19,6 +19,14 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+const CURSOR_WORK_STARTED_EVENTS: &[&str] = &[
+    "before-submit-prompt",
+    "after-shell-execution",
+    "after-mcp-execution",
+    "after-file-edit",
+    "post-tool-use",
+];
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HookEvent {
     pub event_type: String,
@@ -122,6 +130,15 @@ impl HookEvent {
     }
 
     fn notification_looks_like_error(&self) -> bool {
+        if self.resolve_provider() == ProviderId::ClaudeCode
+            && self.event_type == "notification"
+            && notification_looks_like_user_attention(
+                self.task_hint.as_deref().or(self.tool_call.as_deref()),
+            )
+        {
+            return false;
+        }
+
         self.task_hint
             .as_deref()
             .or(self.tool_call.as_deref())
@@ -657,36 +674,31 @@ fn should_apply_status_transition(
         return true;
     };
 
-    // Keep yellow while Cursor waits for shell/MCP approval; stop between turns
-    // must not clear an in-flight Waiting state.
-    if current == Status::Waiting && next == Status::Idle && event_type == "stop" {
-        return false;
+    let cursor_event = source == Some("cursor")
+        || infer_provider_from_event_type(event_type) == ProviderId::Cursor;
+
+    if cursor_event {
+        return should_apply_cursor_status_transition(current, next, event_type);
     }
 
     if current != Status::Waiting || next != Status::Working {
         return true;
     }
 
-    let cursor_event = source == Some("cursor")
-        || infer_provider_from_event_type(event_type) == ProviderId::Cursor;
-
-    if cursor_event {
-        return matches!(
-            event_type,
-            "post-tool-use"
-                | "post-tool-use-failure"
-                | "after-shell-execution"
-                | "after-mcp-execution"
-                | "after-file-edit"
-                | "stop"
-                | "session-end"
-        );
-    }
-
     matches!(
         event_type,
         "post-tool-use" | "after-shell-execution" | "after-mcp-execution" | "stop"
     )
+}
+
+fn should_apply_cursor_status_transition(current: Status, next: Status, event_type: &str) -> bool {
+    if current == Status::Waiting {
+        return matches!(next, Status::Error)
+            || (next == Status::Working && CURSOR_WORK_STARTED_EVENTS.contains(&event_type))
+            || event_type == "session-end";
+    }
+
+    true
 }
 
 fn should_ignore_late_event_after_terminal(
@@ -719,6 +731,25 @@ fn should_ignore_late_event_after_terminal(
         }
         _ => false,
     }
+}
+
+fn notification_looks_like_user_attention(text: Option<&str>) -> bool {
+    let Some(text) = text else {
+        return false;
+    };
+    let value = text.to_ascii_lowercase();
+
+    value.contains("permission")
+        || value.contains("approve")
+        || value.contains("approval")
+        || value.contains("confirm")
+        || value.contains("confirmation")
+        || value.contains("run in background")
+        || value.contains("waiting for")
+        || value.contains("needs your")
+        || value.contains("requires your")
+        || value.contains("allow")
+        || value.contains("deny")
 }
 
 fn find_header_split(buffer: &[u8]) -> Option<(usize, usize)> {
@@ -846,5 +877,55 @@ mod tests {
             "stop",
             Some("cursor"),
         ));
+    }
+
+    #[test]
+    fn cursor_stop_marks_working_idle() {
+        let event = HookEvent {
+            event_type: "stop".to_string(),
+            session_id: "conv-1".to_string(),
+            cwd: None,
+            tool_call: None,
+            task_hint: None,
+            source: Some("cursor".to_string()),
+        };
+
+        assert_eq!(event.resolve_status(), Some(Status::Idle));
+        assert!(should_apply_status_transition(
+            Some(Status::Working),
+            Status::Idle,
+            "stop",
+            Some("cursor"),
+        ));
+    }
+
+    #[test]
+    fn cursor_after_agent_response_does_not_clear_waiting() {
+        assert!(!should_apply_status_transition(
+            Some(Status::Waiting),
+            Status::Working,
+            "after-agent-response",
+            Some("cursor"),
+        ));
+        assert!(should_apply_status_transition(
+            Some(Status::Waiting),
+            Status::Working,
+            "after-shell-execution",
+            Some("cursor"),
+        ));
+    }
+
+    #[test]
+    fn claude_attention_notification_is_waiting_not_error() {
+        let event = HookEvent {
+            event_type: "notification".to_string(),
+            session_id: "claude-1".to_string(),
+            cwd: None,
+            tool_call: None,
+            task_hint: Some("Permission required: confirm whether to run command 502".to_string()),
+            source: Some("claude".to_string()),
+        };
+
+        assert_eq!(event.resolve_status(), Some(Status::Waiting));
     }
 }

@@ -1,6 +1,6 @@
 use deva_light::hook_installer::{
-    hook_binary_is_current, merge_hooks, merge_wsl_hooks, remove_ai_light_hooks,
-    windows_path_to_wsl_path, wsl_ai_light_url_prefix,
+    hook_binary_is_current, merge_cursor_hooks, merge_hooks, merge_wsl_hooks,
+    remove_ai_light_hooks, windows_path_to_wsl_path, wsl_ai_light_url_prefix,
 };
 use serde_json::json;
 use std::path::Path;
@@ -94,6 +94,16 @@ fn merge_hooks_replaces_existing_ai_light_hooks_for_same_event() {
         "/new/deva-light-hook"
     );
     assert_eq!(session_start[0]["hooks"][0]["args"][0], "session-start");
+}
+
+#[test]
+fn merge_cursor_hooks_includes_background_and_compact_events() {
+    let merged = merge_cursor_hooks(json!({}), Path::new("/path/to/deva-light-hook")).unwrap();
+    let hooks = merged["hooks"].as_object().unwrap();
+
+    assert!(hooks.get("preToolUse").is_some());
+    assert!(hooks.get("beforeShellExecution").is_some());
+    assert!(hooks.get("preCompact").is_some());
 }
 
 #[test]

@@ -18,7 +18,7 @@ const HOOK_EVENTS: [(&str, &str); 8] = [
     ("SessionEnd", "session-end"),
 ];
 
-const CURSOR_HOOK_EVENTS: [&str; 17] = [
+const CURSOR_HOOK_EVENTS: &[&str] = &[
     "sessionStart",
     "sessionEnd",
     "beforeSubmitPrompt",
@@ -33,6 +33,7 @@ const CURSOR_HOOK_EVENTS: [&str; 17] = [
     "subagentStart",
     "subagentStop",
     "stop",
+    "preCompact",
     "afterAgentResponse",
     "afterAgentThought",
     "afterFileEdit",

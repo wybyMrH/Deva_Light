@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- 修复 Cursor 完成后仍保持绿灯、刷新又被旧 transcript 复活的问题：Cursor `stop` 仅保护等待确认中的黄灯，已工作的会话会回到空闲红灯；手动刷新只恢复 5 分钟内的新 transcript。
+- 修复 Cursor 新版确认流程漏检：补齐 `preCompact` hook 安装，并兼容 `afterToolUse`、`beforeMcpExecution` / `afterMcpExecution` 等事件名变体。
+- 修复 Claude 启动后普通确认/权限通知被误判为错误红灯的问题：带确认语义的 notification 现在保持 Waiting 黄灯，真实 HTTP/auth/retry 错误仍保持 Error 红灯。
+
 ## v0.2.4 - 2026-06-23
 
 - 修复 Windows 上只看到 Codex、Claude/Cursor 失联的问题：hook 事件改为同步发送并记录成功/失败，避免进程退出前后台 POST 被杀掉。

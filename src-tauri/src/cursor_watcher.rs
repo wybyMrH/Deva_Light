@@ -188,22 +188,18 @@ struct CursorSessionEntry {
 }
 
 pub(crate) fn recent_cursor_session_ids() -> HashSet<String> {
+    recent_cursor_session_ids_with_window(REMOVE_INACTIVE_AFTER)
+}
+
+fn recent_cursor_session_ids_with_window(window: Duration) -> HashSet<String> {
     let Ok(entries) = scan_cursor_sessions(&cursor_projects_dirs()) else {
         return HashSet::new();
     };
 
-    let now = SystemTime::now();
     entries
         .into_iter()
         .filter_map(|entry| {
-            let inactive_for = now
-                .duration_since(entry.last_activity_at)
-                .unwrap_or(REMOVE_INACTIVE_AFTER);
-            if inactive_for < REMOVE_INACTIVE_AFTER {
-                Some(entry.session_id)
-            } else {
-                None
-            }
+            is_recent_cursor_activity(entry.last_activity_at, window).then_some(entry.session_id)
         })
         .collect()
 }
@@ -240,17 +236,20 @@ fn should_restore_from_transcript(
     true
 }
 
-/// Recent Cursor sessions with their decoded working directory, for proactive
-/// discovery. Uses the same window as refresh/live checks so a manual refresh
-/// can re-light sessions that hooks temporarily missed.
+/// Very recent Cursor sessions with their decoded working directory, for
+/// proactive discovery. The short window avoids resurrecting completed chats.
 pub(crate) fn discover_cursor_sessions() -> Vec<(String, PathBuf)> {
+    discover_cursor_sessions_with_window(RESTORE_RECENT_AFTER)
+}
+
+fn discover_cursor_sessions_with_window(window: Duration) -> Vec<(String, PathBuf)> {
     let Ok(entries) = scan_cursor_sessions(&cursor_projects_dirs()) else {
         return Vec::new();
     };
     entries
         .into_iter()
         .filter_map(|entry| {
-            if !is_recent_cursor_activity(entry.last_activity_at, REMOVE_INACTIVE_AFTER) {
+            if !is_recent_cursor_activity(entry.last_activity_at, window) {
                 return None;
             }
             entry.cwd.map(|cwd| (entry.session_id, cwd))
@@ -502,5 +501,10 @@ mod tests {
     fn ignores_temp_and_numeric_cursor_project_slugs() {
         assert_eq!(decode_cursor_project_slug("tmp-66a3e247"), None);
         assert_eq!(decode_cursor_project_slug("1780589580426"), None);
+    }
+
+    #[test]
+    fn cursor_refresh_discovery_uses_short_restore_window() {
+        assert!(RESTORE_RECENT_AFTER < REMOVE_INACTIVE_AFTER);
     }
 }
